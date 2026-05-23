@@ -27,6 +27,12 @@ class PropertySerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    # User details
+    user_first_name = serializers.CharField(source='user_id.first_name', read_only=True)
+    user_last_name = serializers.CharField(source='user_id.last_name', read_only=True)
+    user_mobile_no = serializers.CharField(source='user_id.mobile_no', read_only=True)
+    user_email = serializers.EmailField(source='user_id.email', read_only=True)
+
     class Meta:
         model = Property
         fields = '__all__'
@@ -46,6 +52,31 @@ class SellPropertyCoordinatesSerializer(serializers.ModelSerializer):
     class Meta:
         model = Property
         fields = ('property_id', 'type', 'lat', 'long', 'category_id', 'price')
+
+
+class PropertyMapSerializer(serializers.ModelSerializer):
+    """
+    Optimized serializer for map properties with single image
+    """
+    first_image = serializers.SerializerMethodField()
+    category_name = serializers.CharField(source='category_id.category', read_only=True)
+
+    class Meta:
+        model = Property
+        # fields = (
+        #     'property_id', 'type', 'lat', 'long', 'category_id', 'category_name', 
+        #     'price', 'property_name', 'location', 'first_image'
+        # )
+        fields = '__all__'
+
+    def get_first_image(self, obj):
+        """
+        Get only the first image for the property to optimize performance
+        """
+        first_image = obj.property_images.first()
+        if first_image and first_image.image:
+            return first_image.image.url
+        return None
 
 
 
@@ -129,6 +160,12 @@ class NewLocationSerializer(serializers.Serializer):
 class PropertyRequestSerializer(serializers.ModelSerializer):
     pro_loc = PropertyRequestLocationsSerializer(many=True, read_only=True)
 
+    # Include user information directly like BankAuctionPropertySerializer
+    user_first_name = serializers.CharField(source='user_id.first_name', read_only=True)
+    user_last_name = serializers.CharField(source='user_id.last_name', read_only=True)
+    user_mobile_no = serializers.CharField(source='user_id.mobile_no', read_only=True)
+    user_username = serializers.CharField(source='user_id.username', read_only=True)
+
     # Use the typed nested serializer so swagger shows exact keys instead of additionalPropX
     new_locations = NewLocationSerializer(many=True, write_only=True, required=False)
 
@@ -170,6 +207,12 @@ class BankAuctionPropertyDocsSerializer(serializers.ModelSerializer):
 class BankAuctionPropertySerializer(serializers.ModelSerializer):
 
     bank_pro_doc = BankAuctionPropertyDocsSerializer(many=True, read_only=True)
+    
+    # Include user information
+    user_first_name = serializers.CharField(source='user_id.first_name', read_only=True)
+    user_last_name = serializers.CharField(source='user_id.last_name', read_only=True)
+    user_mobile_no = serializers.CharField(source='user_id.mobile_no', read_only=True)
+    user_email = serializers.EmailField(source='user_id.email', read_only=True)
 
     # For uploading new documents
     new_documents = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)

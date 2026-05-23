@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import *
+from .filter_fetch_views import *
 
 urlpatterns = [   
     path('property-category/', PropertyCatView.as_view()),         
@@ -16,6 +17,7 @@ urlpatterns = [
 
     path('property-request/', PropertyRequestCRUD.as_view()),          # POST, GET ALL
     path('property-request/<int:pk>/', PropertyRequestCRUD.as_view()), # GET, PUT, DELETE
+    path('property-request/type/', PropertyRequestTypeAPIView.as_view()), # GET by looking_for type
     
     path('response-property-request/', ResponsePropertyRequestCRUD.as_view()),
     path('response-property-request/<int:pk>/', ResponsePropertyRequestCRUD.as_view()),
@@ -30,9 +32,17 @@ urlpatterns = [
     path('properties/sell/non-admin/coordinates/', SellPropertiesByNonAdminCoordinatesAPIView.as_view(), name='sell-properties-non-admin-coordinates'),
     path('properties/sell/non-admin/summary/<int:pk>/', SellPropertiesByNonAdminSummaryAPIView.as_view(), name='sell-properties-non-admin-summary'),
     path('properties/best-deal/approved/', BestDealApprovedPropertiesAPIView.as_view(), name='best-deal-approved'),
+    
     path('properties/filter/', FilteredPropertyAPIView.as_view(), name='filtered-properties'),
+
+    path('properties/list_filter/', FilteredListPropertyAPIView.as_view(), name='filtered-list-properties'),
 
     path('bank-properties/filter/', FilteredBankAuctionPropertyAPIView.as_view(), name='filtered-bank-auction-properties'),
 
     path('properties/sell/non-admin/box/', SellPropertiesByNonAdminboxAPIView.as_view()),
+
+    path('generate-dummy-properties/', GenerateDummyPropertiesAPI.as_view()),
+    path('generate-fake-vendors/', GenerateFakeVendorsAPIView.as_view()),
+
+    path('dynamic/table/filter/', MultiModelDynamicAPIView.as_view()),
 ]

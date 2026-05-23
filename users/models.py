@@ -1,9 +1,12 @@
 from django.db import models
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from property.models import *
+# from meilisearch_helpers import add_or_update_user_in_meilisearch, remove_user_from_meilisearch
 
 
 
@@ -136,7 +139,7 @@ class User(models.Model):
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
     email = models.EmailField()
-    mobile_no = models.CharField(max_length=15)
+    mobile_no = models.CharField(max_length=15, null=True, blank=True)
     profile = models.ImageField(null=True, blank=True, default=None, upload_to='media/user_profiles/')
     password = models.CharField(max_length=255, blank=True)
     state = models.CharField(max_length=255, null=True, blank=True)
@@ -175,6 +178,15 @@ class User(models.Model):
             self.password = make_password(self.password)
         super(User, self).save(*args, **kwargs)
 
+
+# @receiver(post_save, sender=User)
+# def sync_user_to_meilisearch(sender, instance, **kwargs):
+#     add_or_update_user_in_meilisearch(instance)
+
+
+# @receiver(post_delete, sender=User)
+# def delete_user_from_meilisearch(sender, instance, **kwargs):
+#     remove_user_from_meilisearch(instance.user_id)
 
 
 class UserOTP(models.Model):

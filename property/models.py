@@ -1,8 +1,18 @@
 from django.db import models
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.contrib.auth.hashers import make_password
 from users.models import *
+from meilisearch_helpers import (
+    add_or_update_bank_property_in_meilisearch, 
+    remove_bank_property_from_meilisearch,
+    add_or_update_property_in_meilisearch,
+    remove_property_from_meilisearch,
+    add_or_update_wanted_property_in_meilisearch,
+    remove_wanted_property_from_meilisearch
+)
 
 
 
@@ -24,9 +34,7 @@ class CleanFloatField(models.FloatField):
 class Property_Cat(models.Model):
     category_types = [
         ('sell', 'sell'),
-        ('rent/lease', 'Rent/Lease'),
-        ('rent/lease', 'Rent/Lease'),
-        ('rent/lease', 'Rent/Lease'),        
+        ('rent/lease', 'Rent/Lease'),      
     ]
     category_id = models.AutoField(primary_key=True)
     user_id = models.ForeignKey('users.User', on_delete=models.CASCADE) #PROTECT
@@ -44,12 +52,12 @@ class Property(models.Model):
     user_id = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='user_properties') #PROTECT
     mobile_no = models.CharField(max_length=15, null=True, blank=True, default=None)
     category_id = models.ForeignKey('Property_Cat', on_delete=models.CASCADE, null=True, blank=True,) #PROTECT  
-    type = models.CharField(max_length=50, null=True, blank=True)  #sell or rent or lease
+    type = models.CharField(max_length=50, null=True, blank=True, db_index=True)  #sell or rent or lease
     admin_mobile = models.CharField(max_length=50, null=True, blank=True) 
-    Admin_status = models.CharField(max_length=200, null=True, blank=True, default=None)
+    Admin_status = models.CharField(max_length=200, null=True, blank=True, default=None, db_index=True)
     property_name = models.CharField(max_length=50, null=True, blank=True, default=None)
 
-    property_type = models.CharField(max_length=50, null=True, blank=True)       
+    property_type = models.CharField(max_length=50, null=True, blank=True, db_index=True)       
 
     min_budget = CleanFloatField(null=True, blank=True)     #float   
     max_budget = CleanFloatField(null=True, blank=True)     #float   
@@ -68,17 +76,17 @@ class Property(models.Model):
     width = CleanFloatField(null=True, blank=True)     #float   
     units = models.CharField(max_length=100, null=True, blank=True)
     buildup_area = CleanFloatField(null=True, blank=True)     #float   
-    posted_by = models.CharField(max_length=50, null=True, blank=True)
-    price = CleanFloatField(null=True, blank=True)     #float   
-    location = models.CharField(max_length=200, null=True, blank=True)
-    lat = models.CharField(max_length=200, null=True, blank=True, default=None)
-    long = models.CharField(max_length=200, null=True, blank=True, default=None)
+    posted_by = models.CharField(max_length=50, null=True, blank=True, db_index=True)
+    price = CleanFloatField(null=True, blank=True, db_index=True)     #float with index   
+    location = models.CharField(max_length=200, null=True, blank=True, db_index=True)
+    lat = models.CharField(max_length=200, null=True, blank=True, default=None, db_index=True)
+    long = models.CharField(max_length=200, null=True, blank=True, default=None, db_index=True)
     nearby = models.CharField(max_length=100, null=True, blank=True)    
-    no_of_flores = models.IntegerField(null=True, blank=True)
-    _1bhk_count = models.IntegerField(null=True, blank=True)
-    _2bhk_count = models.IntegerField(null=True, blank=True)
-    _3bhk_count = models.IntegerField(null=True, blank=True)
-    _4bhk_count = models.IntegerField(null=True, blank=True)
+    no_of_flores = models.IntegerField(null=True, blank=True, db_index=True)
+    _1bhk_count = models.IntegerField(null=True, blank=True, db_index=True)
+    _2bhk_count = models.IntegerField(null=True, blank=True, db_index=True)
+    _3bhk_count = models.IntegerField(null=True, blank=True, db_index=True)
+    _4bhk_count = models.IntegerField(null=True, blank=True, db_index=True)
     rooms_count = models.IntegerField(null=True, blank=True)
     duplex_bedrooms = models.IntegerField(null=True, blank=True)
     bedrooms_count = models.IntegerField(null=True, blank=True)
@@ -106,7 +114,21 @@ class Property(models.Model):
         indexes = [
             models.Index(fields=['lat', 'long']),
             models.Index(fields=['type', 'Admin_status']),
+            models.Index(fields=['type', 'property_type']),
+            models.Index(fields=['type', 'posted_by']),
+            models.Index(fields=['property_type', 'posted_by']),
+            models.Index(fields=['type', 'property_type', 'Admin_status']),
         ]
+
+
+# @receiver(post_save, sender=Property)
+# def sync_property_to_meilisearch(sender, instance, **kwargs):
+#     add_or_update_property_in_meilisearch(instance)
+
+
+# @receiver(post_delete, sender=Property)
+# def delete_property_from_meilisearch(sender, instance, **kwargs):
+#     remove_property_from_meilisearch(instance.property_id)
     
     
 class Property_images(models.Model):    
@@ -130,10 +152,10 @@ class PropertyRequest(models.Model):
         ('jv/jd', 'jv/jd'),
         ('build to suit', 'build to suit')
     ]
-    looking_for = models.CharField(max_length=50, null=True, blank=True, choices=Looking_For_Choices)
+    looking_for = models.CharField(max_length=50, null=True, blank=True, choices=Looking_For_Choices, db_index=True)
     
     
-    property_type = models.CharField(max_length=50, null=True, blank=True)
+    property_type = models.CharField(max_length=50, null=True, blank=True, db_index=True)
     
     length = CleanFloatField(null=True, blank=True)     #float   
     width = CleanFloatField(null=True, blank=True)     #float   
@@ -167,6 +189,16 @@ class PropertyRequest(models.Model):
     
     def __str__(self):
         return f"{self.req_id}"
+
+
+@receiver(post_save, sender=PropertyRequest)
+def sync_property_request_to_meilisearch(sender, instance, **kwargs):
+    add_or_update_wanted_property_in_meilisearch(instance)
+
+
+@receiver(post_delete, sender=PropertyRequest)
+def delete_property_request_from_meilisearch(sender, instance, **kwargs):
+    remove_wanted_property_from_meilisearch(instance.req_id)
 
 
 class PropertyRequestLocations(models.Model):
@@ -240,6 +272,16 @@ class BankAuctionProperty(models.Model):
 
     def __str__(self):
         return f"{self.bank_name} - {self.auction_id}"
+
+
+# @receiver(post_save, sender=BankAuctionProperty)
+# def sync_bank_property_to_meilisearch(sender, instance, **kwargs):
+#     add_or_update_bank_property_in_meilisearch(instance)
+
+
+# @receiver(post_delete, sender=BankAuctionProperty)
+# def delete_bank_property_from_meilisearch(sender, instance, **kwargs):
+#     remove_bank_property_from_meilisearch(instance.bankprop_id)
 
 
 class BankAuctionPropertyDocs(models.Model):

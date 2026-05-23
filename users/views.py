@@ -14,6 +14,8 @@ from django.core.cache import cache
 from cache_config import cache_manager, get_total_users_count, get_user_type_count, update_total_users_count, update_user_type_count
 from uuid import uuid4
 import random
+import re
+from functools import lru_cache
 import string
 from django.db.models import F, Q
 from django.conf import settings
@@ -34,6 +36,94 @@ import razorpay
 import razorpay
 from django.http import JsonResponse
 from django.shortcuts import render
+
+from meilisearch_helpers import get_meilisearch_user_index, MEILISEARCH_DISPLAYED_ATTRIBUTES, MEILISEARCH_SEARCHABLE_ATTRIBUTES
+
+
+def normalize_search_query(search_query):
+    if not search_query:
+        return ''
+    return re.sub(r'\s+', ' ', search_query.strip())
+
+
+def matches_minimum_search_ratio(search_query, record):
+    tokens = [token.lower() for token in re.findall(r'\w+', search_query) if token]
+    if not tokens:
+        return True
+
+    text = ' '.join(
+        str(record.get(field, '') or '').lower() for field in MEILISEARCH_SEARCHABLE_ATTRIBUTES
+    )
+    matched = sum(1 for token in tokens if token in text)
+    return matched / len(tokens) >= 0.5
+
+
+def build_search_cache_key(search_query, user_type_filter, page, page_size, chunk, chunk_number):
+    safe_search = re.sub(r'[^A-Za-z0-9_]+', '_', (search_query or '').strip().lower()) if search_query else 'all'
+    safe_user_type = re.sub(r'[^A-Za-z0-9_]+', '_', (user_type_filter or '').strip().lower()) if user_type_filter else 'all'
+    return f"users_search_{safe_search}_{safe_user_type}_{page}_{page_size}_{chunk}_{chunk_number}"
+
+
+def get_user_filter(user_type_filter):
+    user_filter = {'role': '1'}
+    if user_type_filter:
+        if user_type_filter == 'Old Users':
+            user_filter['user_type'] = None
+        else:
+            user_filter['user_type'] = user_type_filter
+    return user_filter
+
+
+def perform_meilisearch_users(search_query, user_type_filter, actual_offset, actual_page_size):
+    index = get_meilisearch_user_index()
+    if not index:
+        return None, None
+
+    filter_clauses = ['role = 1']
+    if user_type_filter:
+        if user_type_filter == 'Old Users':
+            filter_clauses.append('user_type IS NULL')
+        else:
+            filter_clauses.append(f'user_type = "{user_type_filter}"')
+
+    options = {
+        'filter': filter_clauses,
+        'attributesToRetrieve': MEILISEARCH_DISPLAYED_ATTRIBUTES,
+        'offset': actual_offset,
+        'limit': min(max(actual_page_size, 20) * 5, 1000),
+        'matchingStrategy': 'all' if len(re.findall(r'\w+', search_query)) > 1 else 'last',
+    }
+
+    try:
+        search_result = index.search(search_query, options)
+        hits = search_result.get('hits', [])
+        filtered_hits = [hit for hit in hits if matches_minimum_search_ratio(search_query, hit)]
+        total_count = search_result.get('estimatedTotalHits') or search_result.get('nbHits') or len(filtered_hits)
+        return filtered_hits[:actual_page_size], total_count
+    except Exception:
+        return None, None
+
+
+def perform_db_search_users(search_query, user_type_filter, actual_offset, actual_page_size):
+    user_filter = get_user_filter(user_type_filter)
+    search_q = (
+        Q(first_name__icontains=search_query) |
+        Q(last_name__icontains=search_query) |
+        Q(email__icontains=search_query) |
+        Q(mobile_no__icontains=search_query) |
+        Q(state__icontains=search_query) |
+        Q(city__icontains=search_query) |
+        Q(user_type__icontains=search_query)
+    )
+    queryset = User.objects.filter(**user_filter).filter(search_q).only(
+        'user_id', 'username', 'first_name', 'last_name', 'email', 'mobile_no',
+        'state', 'city', 'role', 'user_type', 'created_at', 'updated_at'
+    )
+
+    total_count = queryset.count()
+    users = queryset[actual_offset:actual_offset + actual_page_size]
+    serializer = UserSerializer(users, many=True)
+    return serializer.data, total_count
 
 # from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 # from rest_framework.permissions import IsAuthenticated
@@ -220,6 +310,7 @@ class UserListCreateAPIView(APIView):
             
             # Get filtering parameters
             user_type_filter = request.GET.get('user_type', '')
+            search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
             
             # Validate page_size
             allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
@@ -235,12 +326,19 @@ class UserListCreateAPIView(APIView):
                 actual_page_size = chunk
                 chunk_number = int(request.GET.get('chunk_number', 0))
                 actual_offset = offset + (chunk_number * chunk)
-                cache_key = f"users_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_user_type}"
             else:
                 # Regular pagination for non-progressive requests
                 actual_page_size = page_size
                 actual_offset = offset
-                cache_key = f"users_list_{page}_{page_size}_{safe_user_type}"
+                chunk_number = 0
+            
+            if search_query:
+                cache_key = build_search_cache_key(search_query, user_type_filter, page, page_size, chunk, chunk_number)
+            else:
+                if page_size > 100 and request.GET.get('chunk_number') is not None:
+                    cache_key = f"users_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_user_type}"
+                else:
+                    cache_key = f"users_list_{page}_{page_size}_{safe_user_type}"
             
             # Try to get from cache first using cache manager
             cached_data = cache_manager.get(cache_key)
@@ -249,6 +347,47 @@ class UserListCreateAPIView(APIView):
                     return Response(json.loads(cached_data), status=status.HTTP_200_OK)
                 except (json.JSONDecodeError, TypeError):
                     pass  # Invalid cache data, continue with database query
+            
+            if search_query:
+                users_data, total_count = perform_meilisearch_users(
+                    search_query,
+                    user_type_filter,
+                    actual_offset,
+                    actual_page_size
+                )
+                if users_data is None:
+                    users_data, total_count = perform_db_search_users(
+                        search_query,
+                        user_type_filter,
+                        actual_offset,
+                        actual_page_size
+                    )
+
+                total_count = total_count or 0
+                total_pages = (total_count + page_size - 1) // page_size
+                has_next = page < total_pages
+                has_previous = page > 1
+                response_data = {
+                    'data': users_data,
+                    'pagination': {
+                        'current_page': page,
+                        'page_size': page_size,
+                        'total_count': total_count,
+                        'total_pages': total_pages,
+                        'has_next': has_next,
+                        'has_previous': has_previous,
+                        'next_page': page + 1 if has_next else None,
+                        'previous_page': page - 1 if has_previous else None,
+                        'search_query': search_query,
+                        'user_type': user_type_filter,
+                    }
+                }
+                try:
+                    response_json = json.dumps(response_data, default=str)
+                    cache_manager.set(cache_key, response_json, timeout=300)
+                except Exception:
+                    pass
+                return Response(response_data, status=status.HTTP_200_OK)
             
             # Get total count for pagination info using global variable (fast)
             total_count = get_total_users_count()
@@ -450,6 +589,7 @@ class UserGetUserTypeAPIView(APIView):
             page_size = int(request.GET.get('page_size', 20))
             chunk = int(request.GET.get('chunk', 100))
             user_type_filter = request.GET.get('user_type', '')
+            search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
             
             # Validate page_size
             allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
@@ -467,12 +607,19 @@ class UserGetUserTypeAPIView(APIView):
                 actual_page_size = chunk
                 chunk_number = int(request.GET.get('chunk_number', 0))
                 actual_offset = offset + (chunk_number * chunk)
-                cache_key = f"users_type_{safe_user_type}_{page}_{page_size}_{chunk}_{chunk_number}"
             else:
                 # Regular pagination for non-progressive requests
                 actual_page_size = page_size
                 actual_offset = offset
-                cache_key = f"users_type_{safe_user_type}_{page}_{page_size}"
+                chunk_number = 0
+            
+            if search_query:
+                cache_key = build_search_cache_key(search_query, user_type_filter, page, page_size, chunk, chunk_number).replace('users_search_', 'users_type_search_')
+            else:
+                if page_size > 100 and request.GET.get('chunk_number') is not None:
+                    cache_key = f"users_type_{safe_user_type}_{page}_{page_size}_{chunk}_{chunk_number}"
+                else:
+                    cache_key = f"users_type_{safe_user_type}_{page}_{page_size}"
             
             # Try to get from cache first
             cached_data = cache_manager.get(cache_key)
@@ -481,6 +628,47 @@ class UserGetUserTypeAPIView(APIView):
                     return Response(json.loads(cached_data), status=status.HTTP_200_OK)
                 except (json.JSONDecodeError, TypeError):
                     pass
+            
+            if search_query:
+                users_data, total_count = perform_meilisearch_users(
+                    search_query,
+                    user_type_filter,
+                    actual_offset,
+                    actual_page_size
+                )
+                if users_data is None:
+                    users_data, total_count = perform_db_search_users(
+                        search_query,
+                        user_type_filter,
+                        actual_offset,
+                        actual_page_size
+                    )
+
+                total_count = total_count or 0
+                total_pages = (total_count + page_size - 1) // page_size
+                has_next = page < total_pages
+                has_previous = page > 1
+                response_data = {
+                    'data': users_data,
+                    'pagination': {
+                        'current_page': page,
+                        'page_size': page_size,
+                        'total_count': total_count,
+                        'total_pages': total_pages,
+                        'has_next': has_next,
+                        'has_previous': has_previous,
+                        'next_page': page + 1 if has_next else None,
+                        'previous_page': page - 1 if has_previous else None,
+                        'search_query': search_query,
+                        'user_type': user_type_filter,
+                    }
+                }
+                try:
+                    response_json = json.dumps(response_data, default=str)
+                    cache_manager.set(cache_key, response_json, timeout=300)
+                except Exception:
+                    pass
+                return Response(response_data, status=status.HTTP_200_OK)
             
             # Get total count for specific user_type using global variable (fast)
             total_count = get_user_type_count(user_type_filter) if user_type_filter else get_total_users_count()

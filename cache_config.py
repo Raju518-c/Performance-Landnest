@@ -170,6 +170,23 @@ user_type_counts = {
     'Old Users': 0  # For users with user_type=None
 }
 
+# Global variables for total property requests count by looking_for type (initialized on server start)
+total_property_requests_count = None
+looking_for_counts = {
+    'purchase': 0,
+    'rent': 0,
+    'lease': 0,
+    'jv/jd': 0,
+    'build to suit': 0,
+    'all': 0  # For all requests
+}
+
+# Global variables for total bank auction properties count (initialized on server start)
+total_bank_auction_properties_count = None
+
+# Global variables for total properties count (initialized on server start)
+total_properties_count = None
+
 # Cache configuration
 CACHE_CONFIG = {
     'default_timeout': 300,  # 5 minutes
@@ -329,3 +346,244 @@ def update_user_type_count(user_type, increment=0):
 def get_cached_total_users_count():
     """Legacy function - now uses global variable for performance"""
     return get_total_users_count()
+
+# Helper functions for property request caching
+def initialize_total_property_requests_count():
+    """Initialize global total property requests count on server start"""
+    global total_property_requests_count, looking_for_counts
+    try:
+        from property.models import PropertyRequest
+        total_property_requests_count = PropertyRequest.objects.count()
+        logger.info(f"Initialized total_property_requests_count: {total_property_requests_count}")
+        
+        # Initialize looking_for counts
+        initialize_looking_for_counts()
+    except Exception as e:
+        logger.error(f"Failed to initialize total_property_requests_count: {e}")
+        total_property_requests_count = 0
+
+def initialize_looking_for_counts():
+    """Initialize global looking_for counts on server start"""
+    global looking_for_counts
+    try:
+        from property.models import PropertyRequest
+        requests = PropertyRequest.objects.all()
+        
+        # Count by looking_for type
+        for looking_for in looking_for_counts:
+            if looking_for == 'all':
+                looking_for_counts[looking_for] = requests.count()
+            else:
+                looking_for_counts[looking_for] = requests.filter(looking_for=looking_for).count()
+        
+        logger.info(f"Initialized looking_for_counts: {looking_for_counts}")
+    except Exception as e:
+        logger.error(f"Failed to initialize looking_for_counts: {e}")
+        # Set all to 0 on error
+        for key in looking_for_counts:
+            looking_for_counts[key] = 0
+
+def get_total_property_requests_count():
+    """Get total property requests count from global variable (fast)"""
+    global total_property_requests_count
+    if total_property_requests_count is None:
+        # Initialize if not set
+        initialize_total_property_requests_count()
+    return total_property_requests_count or 0
+
+def get_looking_for_count(looking_for):
+    """Get property request count for specific looking_for type from global variable (fast)"""
+    global looking_for_counts
+    if looking_for_counts.get(looking_for) is None:
+        # Initialize if not set
+        initialize_looking_for_counts()
+    return looking_for_counts.get(looking_for, 0)
+
+def update_total_property_requests_count(increment=0):
+    """Update global total property requests count (called on POST/DELETE)"""
+    global total_property_requests_count, looking_for_counts
+    if increment > 0:
+        total_property_requests_count = (total_property_requests_count or 0) + increment
+    else:
+        # Recalculate from database
+        try:
+            from property.models import PropertyRequest
+            total_property_requests_count = PropertyRequest.objects.count()
+            initialize_looking_for_counts()  # Recalculate looking_for counts too
+        except Exception:
+            pass  # Keep existing count if query fails
+    logger.info(f"Updated total_property_requests_count: {total_property_requests_count}")
+
+
+# Helper functions for bank auction property caching
+def initialize_total_bank_auction_properties_count():
+    """Initialize global total bank auction properties count on server start"""
+    global total_bank_auction_properties_count
+    try:
+        from property.models import BankAuctionProperty
+        total_bank_auction_properties_count = BankAuctionProperty.objects.count()
+        logger.info(f"Initialized total_bank_auction_properties_count: {total_bank_auction_properties_count}")
+    except Exception as e:
+        logger.error(f"Failed to initialize total_bank_auction_properties_count: {e}")
+        total_bank_auction_properties_count = 0
+
+def get_total_bank_auction_properties_count():
+    """Get total bank auction properties count from global variable (fast)"""
+    global total_bank_auction_properties_count
+    if total_bank_auction_properties_count is None:
+        initialize_total_bank_auction_properties_count()
+    return total_bank_auction_properties_count or 0
+
+def update_total_bank_auction_properties_count(increment=0):
+    """Update global total bank auction properties count (called on POST/DELETE)"""
+    global total_bank_auction_properties_count
+    if increment != 0:
+        total_bank_auction_properties_count = (total_bank_auction_properties_count or 0) + increment
+    else:
+        try:
+            from property.models import BankAuctionProperty
+            total_bank_auction_properties_count = BankAuctionProperty.objects.count()
+        except Exception:
+            pass
+    logger.info(f"Updated total_bank_auction_properties_count: {total_bank_auction_properties_count}")
+
+
+# Helper functions for property caching
+def initialize_total_properties_count():
+    """Initialize global total properties count on server start (using fast estimation)"""
+    global total_properties_count, property_type_counts, type_counts
+    try:
+        from property.models import Property
+        from django.db import connection
+        
+        # Try to get fast estimate from Postgres/MySQL metadata first
+        if connection.vendor == 'postgresql':
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT reltuples FROM pg_class WHERE relname = 'property_property'")
+                row = cursor.fetchone()
+                if row:
+                    total_properties_count = int(row[0])
+        elif connection.vendor == 'mysql':
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW TABLE STATUS LIKE 'property_property'")
+                row = cursor.fetchone()
+                if row:
+                    # Index 4 is 'Rows' in MySQL SHOW TABLE STATUS
+                    total_properties_count = row[4]
+        
+        # Fallback to standard count only if estimate failed and table isn't too huge
+        if total_properties_count is None or total_properties_count < 0:
+            total_properties_count = Property.objects.count()
+            
+        logger.info(f"Initialized total_properties_count: {total_properties_count}")
+        
+        # Also initialize category/type counts if needed
+        # These are usually smaller and can be counted directly or estimated
+    except Exception as e:
+        logger.error(f"Failed to initialize total_properties_count: {e}")
+        total_properties_count = 800000 # Safety estimate
+
+def get_total_properties_count_fast():
+    """Get total properties count from global variable (fast)"""
+    global total_properties_count
+    if total_properties_count is None:
+        initialize_total_properties_count()
+    return total_properties_count or 0
+
+def get_property_type_count_fast(property_type):
+    """Get count for specific property_type with caching"""
+    cache_key = f"total_count_property_type_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}"
+    cached_count = cache_manager.get(cache_key)
+    if cached_count is not None:
+        return int(cached_count)
+    
+    try:
+        from property.models import Property
+        count = Property.objects.filter(property_type__iexact=property_type).count()
+        cache_manager.set(cache_key, count, 3600) # Cache for 1 hour
+        return count
+    except Exception:
+        return 0
+
+def get_type_count_fast(type_val):
+    """Get count for specific type (rent/sell/lease) with caching"""
+    cache_key = f"total_count_type_{type_val.lower()}"
+    cached_count = cache_manager.get(cache_key)
+    if cached_count is not None:
+        return int(cached_count)
+    
+    try:
+        from property.models import Property
+        count = Property.objects.filter(type__iexact=type_val).count()
+        cache_manager.set(cache_key, count, 3600) # Cache for 1 hour
+        return count
+    except Exception:
+        return 0
+
+def get_property_filter_count_fast(property_type, type_val):
+    """Get count for combined filters with caching"""
+    cache_key = f"total_count_combined_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}_{type_val.lower()}"
+    cached_count = cache_manager.get(cache_key)
+    if cached_count is not None:
+        return int(cached_count)
+    
+    try:
+        from property.models import Property
+        count = Property.objects.filter(property_type__iexact=property_type, type__iexact=type_val).count()
+        cache_manager.set(cache_key, count, 3600) # Cache for 1 hour
+        return count
+    except Exception:
+        return 0
+
+def update_total_properties_count(increment=0):
+    """Update global total properties count (called on POST/DELETE)"""
+    global total_properties_count
+    if increment != 0:
+        total_properties_count = (total_properties_count or 0) + increment
+    else:
+        try:
+            from property.models import Property
+            total_properties_count = Property.objects.count()
+        except Exception:
+            pass
+    logger.info(f"Updated total_properties_count: {total_properties_count}")
+
+def update_looking_for_count(looking_for, increment=0):
+    """Update global looking_for count (called on POST/DELETE)"""
+    global looking_for_counts
+    if increment > 0:
+        looking_for_counts[looking_for] = (looking_for_counts.get(looking_for, 0) + increment)
+        looking_for_counts['all'] = (looking_for_counts.get('all', 0) + increment)
+    else:
+        # Recalculate from database
+        try:
+            from property.models import PropertyRequest
+            requests = PropertyRequest.objects.all()
+            looking_for_counts[looking_for] = requests.filter(looking_for=looking_for).count()
+            looking_for_counts['all'] = requests.count()
+        except Exception:
+            pass  # Keep existing count if query fails
+    logger.info(f"Updated looking_for_count for {looking_for}: {looking_for_counts.get(looking_for, 0)}")
+
+
+
+def update_total_property_requests_count(increment=0):
+    """Update global total property requests count (called on POST/DELETE)"""
+    global total_property_requests_count, looking_for_counts
+    if increment > 0:
+        total_property_requests_count = (total_property_requests_count or 0) + increment
+    else:
+        # Recalculate from database
+
+        try:
+            from property.models import PropertyRequest
+
+            total_property_requests_count = PropertyRequest.objects.count()
+
+            # Optional: refresh looking_for counts also
+            looking_for_counts['all'] = total_property_requests_count
+
+        except Exception:
+            pass
+
+    logger.info(f"Updated total_property_requests_count: {total_property_requests_count}")

@@ -20,6 +20,10 @@ app.conf.beat_schedule = {
         'task': 'users.tasks.check_expired_subscriptions',
         'schedule': crontab(minute='*/5'),  # Run every 5 minutes
     },
+    'cache-city-properties': {
+        'task': 'property.tasks.cache_city_properties',
+        'schedule': crontab(minute='*/5'),  # Run every 5 minutes
+    },
 }
 
 app.conf.timezone = 'Asia/Kolkata'

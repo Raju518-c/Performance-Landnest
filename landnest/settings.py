@@ -215,6 +215,9 @@ EMAIL_HOST_USER = 'propertypincoderinfo@gmail.com'
 EMAIL_HOST_PASSWORD = 'ffbb pfcx ahzb weml'
 
 
+MEILISEARCH_URL = os.environ.get('MEILISEARCH_URL', 'http://127.0.0.1:7700')
+MEILISEARCH_API_KEY = os.environ.get('MEILISEARCH_API_KEY', '')
+
 
 
 
@@ -250,5 +253,13 @@ CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'Asia/Kolkata'
+CELERY_TIMEZONE = 'UTC'
 CELERY_ENABLE_UTC = True
+
+# WebSocket Configuration
+ASGI_APPLICATION = 'landnest.asgi.application'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer'
+    }
+}
