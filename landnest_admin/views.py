@@ -15,6 +15,92 @@ from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.utils import extend_schema
 
 
+
+@method_decorator(csrf_exempt, name='dispatch')
+class VerifyIOSPurchaseView(APIView):
+
+    @extend_schema(request=None)
+    def post(self, request):
+
+        user_id = request.data.get('user_id')
+        plan_id = request.data.get('plan_id')
+        plan_name = request.data.get('plan_name')
+        user_type = request.data.get('user_type')
+
+        try:
+            # Check if plan exists
+            try:
+                plan = subAdminplans.objects.get(plan_id=plan_id)
+            except subAdminplans.DoesNotExist:
+                return Response(
+                    {'error': 'Plan not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Calculate expiry date
+            expiry_map = {
+                "Free": timedelta(days=0),
+                "1 Months": timedelta(days=30),
+                "3 Months": timedelta(days=90),
+                "6 Months": timedelta(days=180),
+                "12 Months": timedelta(days=365),
+                "Lifetime": None,
+            }
+
+            delta = expiry_map.get(plan_name)
+
+            if plan_name == "Lifetime":
+                expired_date = None
+            else:
+                expired_date = timezone.now() + delta if delta else None
+
+            # Deactivate old active subscriptions
+            sub_user.objects.filter(
+                user_id_id=user_id,
+                user_type=user_type,
+                status=True
+            ).update(status=False)
+
+            # Create new subscription
+            new_sub = sub_user.objects.create(
+                user_id_id=user_id,
+                plan_name=plan_name,
+                user_type=user_type,
+                charges=plan.charges,
+                pay_amount=plan.charges,
+                no_of_properties=plan.no_of_properties,
+                no_of_properties_unlimited=plan.no_of_properties_unlimited,
+                no_of_liked_data=plan.no_of_liked_data,
+                no_of_liked_data_unlimited=plan.no_of_liked_data_unlimited,
+                matching_enquiry=plan.matching_enquiry,
+                matching_enquiry_unlimited=plan.matching_enquiry_unlimited,
+                buyer_no=plan.buyer_no,
+                buyer_no_unlimited=plan.buyer_no_unlimited,
+                status=True,
+                sub_type='New',
+                expired_date=expired_date,
+            )
+
+            return Response(
+                {
+                    "message": "iOS purchase verified successfully",
+                    "status": "active",
+                    "sub_id": new_sub.sub_id,
+                    "plan_name": plan_name,
+                    "expires": str(expired_date) if expired_date else "Lifetime"
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class ConstructionCatView(APIView):
 
@@ -375,8 +461,30 @@ class SubscriptionAPI(APIView):
     def delete(self, request, pk):
         try:
             plan = subAdminplans.objects.get(pk=pk)
+
+            if plan.plan_name == 'Free' and plan.trial_days is None:
+                now = timezone.now()
+                updated_count = sub_user.objects.filter(
+                    plan_name='Free',
+                    user_type=plan.user_type
+                ).update(expired_date=now)
+
+                deleted_features_count = UserFeatures.objects.filter(
+                    user_type=plan.user_type
+                ).count()
+                UserFeatures.objects.filter(user_type=plan.user_type).delete()
+            else:
+                updated_count = 0
+                deleted_features_count = 0
+
             plan.delete()
-            return Response({'message': 'Sub Plan deleted'})
+
+            response_data = {'message': 'Sub Plan deleted'}
+            if updated_count:
+                response_data['updated_sub_user_records'] = updated_count
+                response_data['deleted_user_features'] = deleted_features_count
+
+            return Response(response_data)
         except subAdminplans.DoesNotExist:
             return Response({'error': 'Sub Plan not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:

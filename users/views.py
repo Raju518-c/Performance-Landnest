@@ -571,7 +571,7 @@ class UserListCreateAPIView(APIView):
                 update_total_users_count(increment=1)
                 if user.role == '1':
                     update_user_type_count(user.user_type, increment=1)
-                
+
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -806,7 +806,7 @@ class UserRetrieveUpdateDeleteAPIView(APIView):
             if user.role == '1':
                 update_total_users_count(increment=-1)
                 update_user_type_count(user.user_type, increment=-1)
-            
+
             user.delete()
             return Response({'message': 'user deleted successfully'})            
         except Exception as e:
@@ -880,8 +880,8 @@ class UserLoginAPIView(APIView):
             try:
                 user = User.objects.get(mobile_no=identifier)
                 print('user2', user)
-            except User.DoesNotExist:   
-                print('2')             
+            except User.DoesNotExist:
+                print('2')    
                 return Response({"error": "Invalid Identifier."}, status=status.HTTP_401_UNAUTHORIZED)
 
         if not check_password(password, user.password):

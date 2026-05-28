@@ -3,6 +3,7 @@ from .views import *
 
 urlpatterns = [   
     path('construction-categories/', ConstructionCatView.as_view()),
+    path('verify-ios-purchase/', VerifyIOSPurchaseView.as_view()),   
     path('construction-categories/<int:pk>/', ConstructionCatView.as_view()), 
     path('construction-content/', ConstructionContentView.as_view()),
     path('construction-content/<int:pk>/', ConstructionContentView.as_view()),        

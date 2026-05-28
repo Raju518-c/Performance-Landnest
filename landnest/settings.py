@@ -125,17 +125,19 @@ WSGI_APPLICATION = 'landnest.wsgi.application'
 #}
 
 
-DATABASES = { 
-    'default': { 
-        'ENGINE': 'django.db.backends.mysql', 
-        'NAME': 'landnest_db', 
-        'USER': 'root', 
-        'PASSWORD': 'Root@1234',         
-        'HOST': 'localhost',                 
-        'PORT': '3306', 
-    } 
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'landnest',
+        'USER': 'root',
+        'PASSWORD': 'Root@1234',
+        'HOST': 'localhost',
+        'PORT': '3306',
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
+    }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -215,11 +217,9 @@ EMAIL_HOST_USER = 'propertypincoderinfo@gmail.com'
 EMAIL_HOST_PASSWORD = 'ffbb pfcx ahzb weml'
 
 
+
 MEILISEARCH_URL = os.environ.get('MEILISEARCH_URL', 'http://127.0.0.1:7700')
 MEILISEARCH_API_KEY = os.environ.get('MEILISEARCH_API_KEY', '')
-
-
-
 
 
 
@@ -227,6 +227,7 @@ MEILISEARCH_API_KEY = os.environ.get('MEILISEARCH_API_KEY', '')
 RAZORPAY_KEY_ID="rzp_test_jIUzBukJnwE5kE"
 RAZORPAY_KEY_SECRET="ZhnhUtHuusGrZBSqBAnwXhAI"
 RAZORPAY_WEBHOOK_SECRET="H$28JjHsLk82!md85Jdks9Ks99&kn61P"
+
 
 # Import advanced cache configuration
 from cache_config import cache_manager, CACHE_CONFIG

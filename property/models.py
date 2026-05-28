@@ -34,7 +34,7 @@ class CleanFloatField(models.FloatField):
 class Property_Cat(models.Model):
     category_types = [
         ('sell', 'sell'),
-        ('rent/lease', 'Rent/Lease'),      
+        ('rent/lease', 'Rent/Lease')             
     ]
     category_id = models.AutoField(primary_key=True)
     user_id = models.ForeignKey('users.User', on_delete=models.CASCADE) #PROTECT

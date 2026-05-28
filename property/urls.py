@@ -40,9 +40,5 @@ urlpatterns = [
     path('bank-properties/filter/', FilteredBankAuctionPropertyAPIView.as_view(), name='filtered-bank-auction-properties'),
 
     path('properties/sell/non-admin/box/', SellPropertiesByNonAdminboxAPIView.as_view()),
-
-    path('generate-dummy-properties/', GenerateDummyPropertiesAPI.as_view()),
-    path('generate-fake-vendors/', GenerateFakeVendorsAPIView.as_view()),
-
     path('dynamic/table/filter/', MultiModelDynamicAPIView.as_view()),
 ]

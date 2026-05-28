@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.cache import cache
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 

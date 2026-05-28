@@ -130,6 +130,7 @@ class subAdminplans(models.Model):
     user_id = models.ForeignKey('users.User', on_delete=models.CASCADE, null=True, blank=True) #PROTECT
     plan_name = models.CharField(null=True, blank=True, max_length=100, choices=Plan_Name)    
     user_type = models.CharField(null=True, blank=True, max_length=100, choices=User_Type)
+    apple_product_id = models.CharField(max_length=200, null=True, blank=True)
     actual_price = CleanFloatField(null=True, blank=True)     #float
     charges = CleanFloatField(null=True, blank=True)        #float
     status = models.BooleanField(default=True)
