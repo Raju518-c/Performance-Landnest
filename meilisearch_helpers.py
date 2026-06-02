@@ -68,29 +68,17 @@ MEILI_WANTED_DISPLAYED = [
     'location', 'area', 'units', 'created_at', 'updated_at'
 ]
 MEILI_WANTED_FILTERABLE = ['looking_for', 'property_type', 'user_id']
-PLAYED = [
-    'property_id', 'user_id', 'property_name', 'location', 'posted_by', 
-    'description', 'property_type', 'type', 'category_id', 'category_name', 
-    'price', 'site_area', 'facing', 'units', 'min_budget', 'max_budget', 
-    'min_acres', 'max_acres', '_1bhk_count', '_2bhk_count', '_3bhk_count', 
-    '_4bhk_count', 'rooms_count', 'bedrooms_count', 'no_of_flores', 'lift',
-    'first_name', 'last_name', 'mobile_no', 'email', 'created_at', 'updated_at', 'Admin_status', 'user_role'
-]
-MEILI_PROPERTY_FILTERABLE = ['type', 'Admin_status', 'category_name', 'property_type', 'user_id', 'price', 'user_role']
 
-# Wanted Property (Property Request) constants
-MEILI_WANTED_INDEX = 'property_requests'
-MEILI_WANTED_SEARCHABLE = [
-    'first_name', 'last_name', 'looking_for', 'property_type', 
-    'min_budget', 'max_budget', 'no_of_bedrooms', 'location'
+# Consultant Request constants
+MEILI_CONSULTANT_INDEX = 'consultant_requests'
+MEILI_CONSULTANT_SEARCHABLE = [
+    'first_name', 'last_name', 'interested_on', 'mobile_no', 'email'
 ]
-MEILI_WANTED_DISPLAYED = [
-    'req_id', 'user_id', 'first_name', 'last_name', 'user_mobile_no', 'user_email',
-    'looking_for', 'property_type', 'min_budget', 'max_budget', 'no_of_bedrooms',
-    'location', 'area', 'units', 'created_at', 'updated_at'
+MEILI_CONSULTANT_DISPLAYED = [
+    'request_id', 'user_id', 'first_name', 'last_name', 'mobile_no', 'email',
+    'interested_on', 'created_at', 'updated_at'
 ]
-MEILI_WANTED_FILTERABLE = ['looking_for', 'property_type', 'user_id']
-
+MEILI_CONSULTANT_FILTERABLE = ['interested_on', 'user_id']
 
 @lru_cache(maxsize=1)
 def get_meilisearch_client():
