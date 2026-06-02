@@ -44,9 +44,31 @@ MEILI_PROPERTY_SEARCHABLE = [
     'type', 'category_name', 'first_name', 'last_name', 'facing', 'units',
     'min_budget', 'max_budget', 'min_acres', 'max_acres', 'price',
     '_1bhk_count', '_2bhk_count', '_3bhk_count', '_4bhk_count', 
-    'rooms_count', 'bedrooms_count', 'no_of_flores', 'lift'
+    'rooms_count', 'bedrooms_count', 'no_of_flores', 'lift', 'Admin_status'
 ]
 MEILI_PROPERTY_DISPLAYED = [
+    'property_id', 'user_id', 'property_name', 'location', 'posted_by', 
+    'description', 'property_type', 'type', 'category_id', 'category_name', 
+    'price', 'site_area', 'facing', 'units', 'min_budget', 'max_budget', 
+    'min_acres', 'max_acres', '_1bhk_count', '_2bhk_count', '_3bhk_count', 
+    '_4bhk_count', 'rooms_count', 'bedrooms_count', 'no_of_flores', 'lift',
+    'first_name', 'last_name', 'mobile_no', 'email', 'created_at', 'updated_at', 'Admin_status', 'user_role'
+]
+MEILI_PROPERTY_FILTERABLE = ['type', 'Admin_status', 'category_name', 'property_type', 'user_id', 'price', 'user_role']
+
+# Wanted Property (Property Request) constants
+MEILI_WANTED_INDEX = 'property_requests'
+MEILI_WANTED_SEARCHABLE = [
+    'first_name', 'last_name', 'looking_for', 'property_type', 
+    'min_budget', 'max_budget', 'no_of_bedrooms', 'location'
+]
+MEILI_WANTED_DISPLAYED = [
+    'req_id', 'user_id', 'first_name', 'last_name', 'user_mobile_no', 'user_email',
+    'looking_for', 'property_type', 'min_budget', 'max_budget', 'no_of_bedrooms',
+    'location', 'area', 'units', 'created_at', 'updated_at'
+]
+MEILI_WANTED_FILTERABLE = ['looking_for', 'property_type', 'user_id']
+PLAYED = [
     'property_id', 'user_id', 'property_name', 'location', 'posted_by', 
     'description', 'property_type', 'type', 'category_id', 'category_name', 
     'price', 'site_area', 'facing', 'units', 'min_budget', 'max_budget', 
@@ -336,6 +358,67 @@ def add_or_update_bank_property_in_meilisearch(prop):
     document = format_bank_property_for_index(prop)
     try:
         index.add_documents([document])
+    except Exception:
+        pass
+
+
+@lru_cache(maxsize=1)
+def get_meilisearch_consultant_index():
+    try:
+        client = get_meilisearch_client()
+        try:
+            index = client.get_index(MEILI_CONSULTANT_INDEX)
+        except Exception:
+            index = client.create_index(MEILI_CONSULTANT_INDEX, {'primaryKey': 'request_id'})
+
+        try:
+            index.update_searchable_attributes(MEILI_CONSULTANT_SEARCHABLE)
+            index.update_displayed_attributes(MEILI_CONSULTANT_DISPLAYED)
+            index.update_filterable_attributes(MEILI_CONSULTANT_FILTERABLE)
+            index.update_ranking_rules(['typo', 'words', 'proximity', 'attribute', 'exactness'])
+            index.update_pagination({'maxTotalHits': 100000})
+        except Exception:
+            pass
+
+        return index
+    except Exception:
+        return None
+
+
+def format_consultant_req_for_index(req):
+    user = req.user_id
+    return {
+        'request_id': req.request_id,
+        'user_id': req.user_id_id,
+        'first_name': user.first_name if user else None,
+        'last_name': user.last_name if user else None,
+        'mobile_no': user.mobile_no if user else None,
+        'email': user.email if user else None,
+        'interested_on': req.interested_on,
+        'created_at': req.created_at.isoformat() if req.created_at else None,
+        'updated_at': req.updated_at.isoformat() if req.updated_at else None,
+    }
+
+
+def add_or_update_consultant_req_in_meilisearch(req):
+    index = get_meilisearch_consultant_index()
+    if not index:
+        return
+
+    document = format_consultant_req_for_index(req)
+    try:
+        index.add_documents([document])
+    except Exception:
+        pass
+
+
+def remove_consultant_req_from_meilisearch(request_id):
+    index = get_meilisearch_consultant_index()
+    if not index:
+        return
+
+    try:
+        index.delete_document(request_id)
     except Exception:
         pass
 

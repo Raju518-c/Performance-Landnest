@@ -37,7 +37,13 @@ import razorpay
 from django.http import JsonResponse
 from django.shortcuts import render
 
-from meilisearch_helpers import get_meilisearch_user_index, MEILISEARCH_DISPLAYED_ATTRIBUTES, MEILISEARCH_SEARCHABLE_ATTRIBUTES
+from meilisearch_helpers import (
+    get_meilisearch_user_index, 
+    MEILISEARCH_DISPLAYED_ATTRIBUTES, 
+    MEILISEARCH_SEARCHABLE_ATTRIBUTES,
+    get_meilisearch_consultant_index,
+    MEILI_CONSULTANT_DISPLAYED
+)
 
 
 def normalize_search_query(search_query):
@@ -115,9 +121,8 @@ def perform_db_search_users(search_query, user_type_filter, actual_offset, actua
         Q(city__icontains=search_query) |
         Q(user_type__icontains=search_query)
     )
-    queryset = User.objects.filter(**user_filter).filter(search_q).only(
-        'user_id', 'username', 'first_name', 'last_name', 'email', 'mobile_no',
-        'state', 'city', 'role', 'user_type', 'created_at', 'updated_at'
+    queryset = User.objects.filter(**user_filter).filter(search_q).prefetch_related(
+        'user_features', 'user_properties', 'user_prop_req', 'user_best_deals'
     )
 
     total_count = queryset.count()
@@ -333,12 +338,12 @@ class UserListCreateAPIView(APIView):
                 chunk_number = 0
             
             if search_query:
-                cache_key = build_search_cache_key(search_query, user_type_filter, page, page_size, chunk, chunk_number)
+                cache_key = build_search_cache_key(search_query, user_type_filter, page, page_size, chunk, chunk_number) + "_v2"
             else:
                 if page_size > 100 and request.GET.get('chunk_number') is not None:
-                    cache_key = f"users_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_user_type}"
+                    cache_key = f"users_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_user_type}_v2"
                 else:
-                    cache_key = f"users_list_{page}_{page_size}_{safe_user_type}"
+                    cache_key = f"users_list_{page}_{page_size}_{safe_user_type}_v2"
             
             # Try to get from cache first using cache manager
             cached_data = cache_manager.get(cache_key)
@@ -398,9 +403,8 @@ class UserListCreateAPIView(APIView):
                 user_filter['user_type'] = user_type_filter
             
             # Get paginated users with filters and optimized query
-            users = User.objects.filter(**user_filter).only(
-                'user_id', 'username', 'email', 'mobile_no', 'state', 'city', 
-                'role', 'user_type', 'created_at', 'updated_at'
+            users = User.objects.filter(**user_filter).prefetch_related(
+                'user_features', 'user_properties', 'user_prop_req', 'user_best_deals'
             )[actual_offset:actual_offset + actual_page_size]
             serializer = UserSerializer(users, many=True)
             
@@ -1186,23 +1190,154 @@ class BestDealsView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+def build_consultant_req_cache_key(search_query, interest_filter, page, page_size, chunk, chunk_number):
+    safe_search = re.sub(r'[^A-Za-z0-9_]+', '_', (search_query or '').strip().lower()) if search_query else 'all'
+    safe_interest = re.sub(r'[^A-Za-z0-9_]+', '_', (interest_filter or '').strip().lower()) if interest_filter else 'all'
+    return f"consultant_req_search_{safe_search}_{safe_interest}_{page}_{page_size}_{chunk}_{chunk_number}"
+
+
+def perform_meilisearch_consultant_req(search_query, interest_filter, actual_offset, actual_page_size):
+    index = get_meilisearch_consultant_index()
+    if not index:
+        return None, None
+
+    filter_clauses = []
+    if interest_filter:
+        filter_clauses.append(f'interested_on = "{interest_filter}"')
+
+    options = {
+        'filter': filter_clauses if filter_clauses else None,
+        'attributesToRetrieve': MEILI_CONSULTANT_DISPLAYED,
+        'offset': actual_offset,
+        'limit': min(max(actual_page_size, 20) * 5, 1000),
+        'matchingStrategy': 'all' if len(re.findall(r'\w+', search_query)) > 1 else 'last',
+    }
+
+    try:
+        search_result = index.search(search_query, options)
+        hits = search_result.get('hits', [])
+        total_count = search_result.get('estimatedTotalHits') or search_result.get('nbHits') or len(hits)
+        return hits[:actual_page_size], total_count
+    except Exception:
+        return None, None
+
+
+def perform_db_search_consultant_req(search_query, interest_filter, actual_offset, actual_page_size):
+    queryset = consultant_req.objects.all()
+    
+    if interest_filter:
+        queryset = queryset.filter(interested_on__iexact=interest_filter)
+    
+    if search_query:
+        search_q = (
+            Q(interested_on__icontains=search_query) |
+            Q(user_id__first_name__icontains=search_query) |
+            Q(user_id__last_name__icontains=search_query) |
+            Q(user_id__mobile_no__icontains=search_query) |
+            Q(user_id__email__icontains=search_query)
+        )
+        queryset = queryset.filter(search_q)
+
+    total_count = queryset.count()
+    objs = queryset.select_related('user_id').order_by('-created_at')[actual_offset:actual_offset + actual_page_size]
+    serializer = consultant_reqSerializer(objs, many=True)
+    return serializer.data, total_count
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class ConsultantReqView(APIView):
 
     def get(self, request, pk=None):
         try:
             if pk:
-                request = consultant_req.objects.get(pk=pk)
-                serializer = consultant_reqSerializer(request)
+                req = consultant_req.objects.get(pk=pk)
+                serializer = consultant_reqSerializer(req)
                 return Response(serializer.data)
+            
+            # Get pagination parameters
+            page = int(request.GET.get('page', 1))
+            page_size = int(request.GET.get('page_size', 20))
+            chunk = int(request.GET.get('chunk', 100))
+            offset = (page - 1) * page_size
+            
+            # Get filtering parameters
+            interest_filter = request.GET.get('interested_on', '')
+            search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
+            
+            # Validate page_size
+            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            if page_size not in allowed_page_sizes:
+                page_size = 20
+            
+            if page_size > 100 and request.GET.get('chunk_number') is not None:
+                actual_page_size = chunk
+                chunk_number = int(request.GET.get('chunk_number', 0))
+                actual_offset = offset + (chunk_number * chunk)
             else:
-                requests = consultant_req.objects.all()
-                serializer = consultant_reqSerializer(requests, many=True)
-                return Response(serializer.data)
+                actual_page_size = page_size
+                actual_offset = offset
+                chunk_number = 0
+
+            # Determine cache key
+            cache_key = build_consultant_req_cache_key(search_query, interest_filter, page, page_size, chunk, chunk_number)
+            
+            # Try to get from cache
+            cached_data = cache_manager.get(cache_key)
+            if cached_data:
+                try:
+                    return Response(json.loads(cached_data), status=status.HTTP_200_OK)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Perform search
+            if search_query:
+                data, total_count = perform_meilisearch_consultant_req(
+                    search_query, interest_filter, actual_offset, actual_page_size
+                )
+                if data is None:
+                    data, total_count = perform_db_search_consultant_req(
+                        search_query, interest_filter, actual_offset, actual_page_size
+                    )
+            else:
+                data, total_count = perform_db_search_consultant_req(
+                    '', interest_filter, actual_offset, actual_page_size
+                )
+
+            total_pages = (total_count + page_size - 1) // page_size
+            has_next = page < total_pages
+            has_previous = page > 1
+            
+            response_data = {
+                'data': data,
+                'pagination': {
+                    'current_page': page,
+                    'page_size': page_size,
+                    'total_count': total_count,
+                    'total_pages': total_pages,
+                    'has_next': has_next,
+                    'has_previous': has_previous,
+                    'next_page': page + 1 if has_next else None,
+                    'previous_page': page - 1 if has_previous else None,
+                    'search_query': search_query,
+                    'interested_on': interest_filter,
+                }
+            }
+            
+            # Cache the result
+            try:
+                response_json = json.dumps(response_data, default=str)
+                cache_manager.set(cache_key, response_json, timeout=300)
+            except Exception:
+                pass
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+
         except consultant_req.DoesNotExist:
             return Response({'error': 'Request not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
     @extend_schema(request=consultant_reqSerializer)
     def post(self, request):       
         try:

@@ -54,9 +54,7 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
     if not index:
         return None, None
 
-    filter_clauses = [
-        'Admin_status = "Approved"'
-    ]
+    filter_clauses = []
     
     if exclude_role:
         filter_clauses.append(f'user_role != "{exclude_role}"')
@@ -90,9 +88,7 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
 
 def perform_db_search_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None):
     # BASE FILTERS: Approved status is MANDATORY
-    queryset = Property.objects.filter(
-        Admin_status='Approved'
-    )
+    queryset = Property.objects.all()
     
     if exclude_role:
         queryset = queryset.exclude(user_id__role=exclude_role)
@@ -133,7 +129,8 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
                 Q(category_id__category__icontains=search_query) |
                 Q(user_id__first_name__icontains=search_query) |
                 Q(user_id__last_name__icontains=search_query) |
-                Q(facing__icontains=search_query)
+                Q(facing__icontains=search_query) |
+                Q(Admin_status__icontains=search_query)                
             )
         
         # Numeric searches for BHK, Bedrooms, etc.
@@ -541,10 +538,8 @@ class PropertyAPIView(APIView):
                 else:
                     total_count = get_total_properties_count_fast()
                 
-                # Apply MANDATORY base filters along with any optional ones
-                queryset = Property.objects.filter(
-                    Admin_status='Approved'
-                )
+                # Apply base filters
+                queryset = Property.objects.all()
                 
                 if exclude_role:
                     queryset = queryset.exclude(user_id__role=exclude_role)
