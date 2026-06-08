@@ -29,9 +29,23 @@ def check_expired_subscriptions():
                 serializer.is_valid(raise_exception=True)
                 serializer.save()
                 
+                existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True)
+
                 try:
                     features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type)
-                    features.delete()
+                    if existing_another_plan:
+                        features.buyer_no = int(features.buyer_no) - int(user.buyer_no)
+                        features.no_of_properties = int(features.no_of_properties) - int(user.no_of_properties)
+                        features.no_of_liked_data = int(features.no_of_liked_data) - int(user.no_of_liked_data)
+                        features.matching_enquiry = int(features.matching_enquiry) - int(user.matching_enquiry)
+                        features.buyer_no_unlimited = existing_another_plan.buyer_no_unlimited
+                        features.no_of_properties_unlimited = existing_another_plan.no_of_properties_unlimited
+                        features.no_of_liked_data_unlimited = existing_another_plan.no_of_liked_data_unlimited
+                        features.matching_enquiry_unlimited = existing_another_plan.matching_enquiry_unlimited
+                        features.save()
+                    else:
+                        features.delete()
+                    
                     print(f'Deleted UserFeatures for user {user.user_id}')
                 except UserFeatures.DoesNotExist:
                     continue
@@ -39,55 +53,203 @@ def check_expired_subscriptions():
                     print(f"Error deleting UserFeatures for user {user.user_id}: {e}")
 
                 try: 
-                    if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Landlord' or user.user_type == 'Agent':
-                        if not user.no_of_properties_unlimited:                                                   
-                            try:
+                    if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Landlord' or user.user_type == 'Agent':                                                                          
+                        try:
+                            if existing_another_plan:
+                                if user.user_type == 'Individual Owner/Builder':
+                                    if not existing_another_plan.no_of_properties_unlimited:
+                                        all_props_qs = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
+                                        
+                                        count = all_props_qs.count()
+                                        limit = int(existing_another_plan.no_of_properties)
+                                        if count <= limit:
+                                            all_props = None
+                                        else:
+                                            all_props = all_props_qs[:count - limit]
+                                    else:
+                                        all_props = None
+
+                                elif user.user_type == 'Landlord':
+                                    if not existing_another_plan.no_of_properties_unlimited:
+                                        all_props_qs = Property.objects.filter(user_id=user.user_id,status=True).filter(Q(type='rent') | Q(type='lease'))
+                                        
+                                        count = all_props_qs.count()
+                                        limit = int(existing_another_plan.no_of_properties)
+                                        if count <= limit:
+                                            all_props = None
+                                        else:
+                                            all_props = all_props_qs[:count - limit]
+                                    else:
+                                        all_props = None
+
+                                elif user.user_type == 'Agent':
+                                    if not existing_another_plan.no_of_properties_unlimited:
+                                        all_props_qs = Property.objects.filter(user_id=user.user_id,status=True, posted_by = 'Agent').filter(Q(type='sell') | Q(type='best-deal'))
+                                        
+                                        count = all_props_qs.count()
+                                        limit = int(existing_another_plan.no_of_properties)
+                                        if count <= limit:
+                                            all_props = None
+                                        else:
+                                            all_props = all_props_qs[:count - limit]
+                                    else:
+                                        all_props = None 
+
+                                elif user.user_type == 'Bank Auction':
+                                    if not existing_another_plan.no_of_properties_unlimited:
+                                        all_props_qs = BankAuctionProperty.objects.filter(user_id=user.user_id,status=True)
+                                        
+                                        count = all_props_qs.count()
+                                        limit = int(existing_another_plan.no_of_properties)
+                                        if count <= limit:
+                                            all_props = None
+                                        else:
+                                            all_props = all_props_qs[:count - limit]
+                                    else:
+                                        all_props = None                   
+
+                            else:
                                 if user.user_type == 'Individual Owner/Builder':
                                     all_props = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
                                 elif user.user_type == 'Landlord':
                                     all_props = Property.objects.filter(user_id=user.user_id,status=True).filter(Q(type='rent') | Q(type='lease'))
                                 elif user.user_type == 'Agent':
                                     all_props = Property.objects.filter(user_id=user.user_id,status=True, posted_by = 'Agent').filter(Q(type='sell') | Q(type='best-deal'))
-                            except Exception as e:
-                                print(f"Error querying properties for user {user.user_id}: {e}")
-                                all_props = None
+                                elif user.user_type == 'Bank Auction':
+                                    all_props = BankAuctionProperty.objects.filter(user_id=user.user_id,status=True)
+                        except Exception as e:
+                            print(f"Error querying properties for user {user.user_id}: {e}")
+                            all_props = None
 
-                            if all_props:
-                                for prop in all_props:
-                                    prop.status = False
-                                    prop.save()
-                                print(f'Deactivated {len(all_props)} properties for user {user.user_id}')
+                        if all_props:
+                            for prop in all_props:
+                                prop.status = False
+                                prop.save()
+                            print(f'Deactivated {len(all_props)} properties for user {user.user_id}')
                     else:
-                        if not user.buyer_no_unlimited:   
-                            try:                                 
+                        
+                        try:      
+                            if existing_another_plan:                           
                                 if user.user_type == 'Buyer':
-                                    all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                    if not existing_another_plan.buyer_no_unlimited:
+                                        all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                        count = all_cart.count()
+                                        limit = int(existing_another_plan.buyer_no)
+                                        if count <= limit:
+                                            all_cart = None
+                                        else:
+                                            all_cart = all_cart[:count - limit]
+                                    else:
+                                        all_cart = None                                                                  
+
                                 elif user.user_type == 'Tenant':
-                                    all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                            except Exception as e:
-                                print(f"Error querying cart for user {user.user_id}: {e}")
-                                all_cart = None
+                                    if not existing_another_plan.buyer_no_unlimited:
+                                        all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                                        count = all_cart.count()
+                                        limit = int(existing_another_plan.buyer_no)
+                                        if count <= limit:
+                                            all_cart = None
+                                        else:
+                                            all_cart = all_cart[:count - limit]
+                                    else:
+                                        all_cart = None                                                                        
 
-                            if all_cart:
-                                for i in all_cart:
-                                    i.status = False
-                                    i.save()
-                                print(f'Deactivated {len(all_cart)} cart items for user {user.user_id}')
+                            else:
+                                if user.user_type == 'Buyer':
+                                    all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')                                    
+                                elif user.user_type == 'Tenant':
+                                    all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')                                    
+                            
+                        except Exception as e:
+                            print(f"Error querying cart for user {user.user_id}: {e}")
+                            all_cart = None                        
 
-                            try:                                 
+                        if all_cart:
+                            for i in all_cart:
+                                i.status = False
+                                i.save()
+                            print(f'Deactivated {len(all_cart)} cart items for user {user.user_id}')                        
+
+
+                        try:      
+                            if existing_another_plan:                           
+                                if user.user_type == 'Buyer':                                                                        
+                                    if not existing_another_plan.matching_enquiry_unlimited:
+                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                        count = all_enquiry_qs.count()
+                                        limit = int(existing_another_plan.matching_enquiry)
+                                        if count <= limit:
+                                            all_enquiry_qs = None
+                                        else:
+                                            all_enquiry_qs = all_enquiry_qs[:count - limit]
+                                    else:
+                                        all_enquiry_qs = None
+
+                                elif user.user_type == 'Tenant':                                    
+                                    if not existing_another_plan.matching_enquiry_unlimited:
+                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                        count = all_enquiry_qs.count()
+                                        limit = int(existing_another_plan.matching_enquiry)
+                                        if count <= limit:
+                                            all_enquiry_qs = None
+                                        else:
+                                            all_enquiry_qs = all_enquiry_qs[:count - limit]
+                                    else:
+                                        all_enquiry_qs = None                                        
+
+                            else:
+                                if user.user_type == 'Buyer':                                    
+                                    all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                elif user.user_type == 'Tenant':                                    
+                                    all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                            
+                        except Exception as e:
+                            print(f"Error querying cart for user {user.user_id}: {e}")                            
+                            all_enquiry_qs = None
+                        if all_enquiry_qs:
+                            for i in all_enquiry_qs:
+                                i.status = False
+                                i.save()
+                            print(f'Deactivated {len(all_enquiry_qs)} enquiry items for user {user.user_id}')
+
+                        try:    
+                            if existing_another_plan:
+                                if user.user_type == 'Buyer':
+                                    if not existing_another_plan.no_of_liked_data_unlimited:
+                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                        count = all_act.count()
+                                        limit = int(existing_another_plan.no_of_liked_data)
+                                        if count <= limit:
+                                            all_act = None
+                                        else:
+                                            all_act = all_act[:count - limit]
+                                    else:
+                                        all_act = None
+                                elif user.user_type == 'Tenant':
+                                    if not existing_another_plan.no_of_liked_data_unlimited:
+                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                                        count = all_act.count()
+                                        limit = int(existing_another_plan.no_of_liked_data)
+                                        if count <= limit:
+                                            all_act = None
+                                        else:
+                                            all_act = all_act[:count - limit]
+                                    else:
+                                        all_act = None
+                            else:                                                              
                                 if user.user_type == 'Buyer':
                                     all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
                                 elif user.user_type == 'Tenant':
                                     all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                            except Exception as e:
-                                print(f"Error querying activities for user {user.user_id}: {e}")
-                                all_act = None
+                        except Exception as e:
+                            print(f"Error querying activities for user {user.user_id}: {e}")
+                            all_act = None
 
-                            if all_act:
-                                for i in all_act:
-                                    i.status = False
-                                    i.save()
-                                print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
+                        if all_act:
+                            for i in all_act:
+                                i.status = False
+                                i.save()
+                            print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
 
                 except Exception as e:
                     print(f"Error updating property visibility for user {user.user_id}: {e}")

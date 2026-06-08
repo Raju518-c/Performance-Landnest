@@ -406,6 +406,94 @@ class ApproveMultipleDealsView(APIView):
 
 
 
+
+def assign_free_plan_to_all_users(plan):
+    if plan.plan_name != 'Free':
+        return 0
+        
+    user_type = plan.user_type
+    now = timezone.now()
+    
+    # Find users who have active subscriptions for this user_type
+    users_with_active_plan = sub_user.objects.filter(
+        user_type=user_type,
+        plan_name='Free',
+        status=True
+    ).filter(
+        Q(expired_date__isnull=True) | Q(expired_date__gt=now)
+    ).values_list('user_id', flat=True)
+    
+    # Users without active plan for this user_type
+    users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan, role='1')
+    # users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan)
+    
+    assigned_count = 0
+    for user in users_without_plan:
+        # Calculate expired_date
+        if plan.plan_name == 'Lifetime':
+            expired_date = None
+        else:
+            expired_date = now + timedelta(days=plan.trial_days or 0) if plan.trial_days else None
+        
+        # Create sub_user entry
+        sub_user_obj = sub_user(
+            user_id=user,
+            plan_name=plan.plan_name,
+            razor_plan_id=plan.razor_plan_id,
+            user_type=user_type,
+            charges=plan.charges,
+            buyer_no_unlimited=plan.buyer_no_unlimited,
+            buyer_no=plan.buyer_no,
+            no_of_properties_unlimited=plan.no_of_properties_unlimited,
+            no_of_liked_data_unlimited=plan.no_of_liked_data_unlimited,
+            matching_enquiry_unlimited=plan.matching_enquiry_unlimited,
+            no_of_properties=plan.no_of_properties,
+            no_of_liked_data=plan.no_of_liked_data,
+            matching_enquiry=plan.matching_enquiry,
+            expired_date=expired_date,
+            status=True,
+            sub_type='New'
+        )
+        sub_user_obj.save()
+        
+        # Update or create UserFeatures
+        features, created = UserFeatures.objects.get_or_create(
+            user_id=user,
+            user_type=user_type,
+            defaults={
+                'buyer_no_unlimited': plan.buyer_no_unlimited,
+                'buyer_no': plan.buyer_no,
+                'no_of_properties_unlimited': plan.no_of_properties_unlimited,
+                'no_of_liked_data_unlimited': plan.no_of_liked_data_unlimited,
+                'matching_enquiry_unlimited': plan.matching_enquiry_unlimited,
+                'no_of_properties': plan.no_of_properties,
+                'no_of_liked_data': plan.no_of_liked_data,
+                'matching_enquiry': plan.matching_enquiry,
+            }
+        )
+        if not created:
+            if not features.buyer_no_unlimited:
+                features.buyer_no_unlimited = plan.buyer_no_unlimited
+            features.buyer_no = (features.buyer_no or 0) + (plan.buyer_no or 0)
+            
+            if not features.no_of_properties_unlimited:
+                features.no_of_properties_unlimited = plan.no_of_properties_unlimited
+
+            if not features.no_of_liked_data_unlimited:
+                features.no_of_liked_data_unlimited = plan.no_of_liked_data_unlimited
+
+            if not features.matching_enquiry_unlimited:
+                features.matching_enquiry_unlimited = plan.matching_enquiry_unlimited
+                
+            features.no_of_properties = (features.no_of_properties or 0) + (plan.no_of_properties or 0)
+            features.no_of_liked_data = (features.no_of_liked_data or 0) + (plan.no_of_liked_data or 0)
+            features.matching_enquiry = (features.matching_enquiry or 0) + (plan.matching_enquiry or 0)
+            features.save()
+        
+        assigned_count += 1
+    return assigned_count
+
+
 @method_decorator(csrf_exempt, name='dispatch')
 class SubscriptionAPI(APIView):
     
@@ -438,7 +526,12 @@ class SubscriptionAPI(APIView):
 
             serializer = subAdminplansSerializer(data=data)
             if serializer.is_valid():
-                serializer.save()
+                plan = serializer.save()
+
+                # Automatically assign to all users if it's a Free plan
+                if plan.plan_name == 'Free':
+                    assign_free_plan_to_all_users(plan)
+
                 return Response({'message': 'Sub Plan created', 'data': serializer.data}, status=status.HTTP_201_CREATED)
             return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -464,15 +557,240 @@ class SubscriptionAPI(APIView):
 
             if plan.plan_name == 'Free' and plan.trial_days is None:
                 now = timezone.now()
-                updated_count = sub_user.objects.filter(
-                    plan_name='Free',
-                    user_type=plan.user_type
-                ).update(expired_date=now)
+                existings_user_plans = sub_user.objects.filter(plan_name=plan.plan_name, user_type=plan.user_type)
 
-                deleted_features_count = UserFeatures.objects.filter(
-                    user_type=plan.user_type
-                ).count()
-                UserFeatures.objects.filter(user_type=plan.user_type).delete()
+                for user in existings_user_plans:
+                    user.expired_date = now
+                    user.status = False
+                    user.save()
+                    
+                    existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True)
+                    
+                    features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type)
+                    
+                    try:
+                        features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type)
+                        if existing_another_plan:
+                            features.buyer_no = int(features.buyer_no) - int(user.buyer_no)
+                            features.no_of_properties = int(features.no_of_properties) - int(user.no_of_properties)
+                            features.no_of_liked_data = int(features.no_of_liked_data) - int(user.no_of_liked_data)
+                            features.matching_enquiry = int(features.matching_enquiry) - int(user.matching_enquiry)
+                            features.buyer_no_unlimited = existing_another_plan.buyer_no_unlimited
+                            features.no_of_properties_unlimited = existing_another_plan.no_of_properties_unlimited
+                            features.no_of_liked_data_unlimited = existing_another_plan.no_of_liked_data_unlimited
+                            features.matching_enquiry_unlimited = existing_another_plan.matching_enquiry_unlimited
+                            features.save()
+                        else:
+                            features.delete()
+                        
+                        print(f'Deleted UserFeatures for user {user.user_id}')
+                    except UserFeatures.DoesNotExist:
+                        continue
+                    except Exception as e:
+                        print(f"Error deleting UserFeatures for user {user.user_id}: {e}")
+
+                    try: 
+                        if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Landlord' or user.user_type == 'Agent':                                                                          
+                            try:
+                                if existing_another_plan:
+                                    if user.user_type == 'Individual Owner/Builder':
+                                        if not existing_another_plan.no_of_properties_unlimited:
+                                            all_props_qs = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
+                                            
+                                            count = all_props_qs.count()
+                                            limit = int(existing_another_plan.no_of_properties)
+                                            if count <= limit:
+                                                all_props = None
+                                            else:
+                                                all_props = all_props_qs[:count - limit]
+                                        else:
+                                            all_props = None
+
+                                    elif user.user_type == 'Landlord':
+                                        if not existing_another_plan.no_of_properties_unlimited:
+                                            all_props_qs = Property.objects.filter(user_id=user.user_id,status=True).filter(Q(type='rent') | Q(type='lease'))
+                                            
+                                            count = all_props_qs.count()
+                                            limit = int(existing_another_plan.no_of_properties)
+                                            if count <= limit:
+                                                all_props = None
+                                            else:
+                                                all_props = all_props_qs[:count - limit]
+                                        else:
+                                            all_props = None
+
+                                    elif user.user_type == 'Agent':
+                                        if not existing_another_plan.no_of_properties_unlimited:
+                                            all_props_qs = Property.objects.filter(user_id=user.user_id,status=True, posted_by = 'Agent').filter(Q(type='sell') | Q(type='best-deal'))
+                                            
+                                            count = all_props_qs.count()
+                                            limit = int(existing_another_plan.no_of_properties)
+                                            if count <= limit:
+                                                all_props = None
+                                            else:
+                                                all_props = all_props_qs[:count - limit]
+                                        else:
+                                            all_props = None 
+
+                                    elif user.user_type == 'Bank Auction':
+                                        if not existing_another_plan.no_of_properties_unlimited:
+                                            all_props_qs = BankAuctionProperty.objects.filter(user_id=user.user_id,status=True)
+                                            
+                                            count = all_props_qs.count()
+                                            limit = int(existing_another_plan.no_of_properties)
+                                            if count <= limit:
+                                                all_props = None
+                                            else:
+                                                all_props = all_props_qs[:count - limit]
+                                        else:
+                                            all_props = None                   
+
+                                else:
+                                    if user.user_type == 'Individual Owner/Builder':
+                                        all_props = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
+                                    elif user.user_type == 'Landlord':
+                                        all_props = Property.objects.filter(user_id=user.user_id,status=True).filter(Q(type='rent') | Q(type='lease'))
+                                    elif user.user_type == 'Agent':
+                                        all_props = Property.objects.filter(user_id=user.user_id,status=True, posted_by = 'Agent').filter(Q(type='sell') | Q(type='best-deal'))
+                                    elif user.user_type == 'Bank Auction':
+                                        all_props = BankAuctionProperty.objects.filter(user_id=user.user_id,status=True)
+                            except Exception as e:
+                                print(f"Error querying properties for user {user.user_id}: {e}")
+                                all_props = None
+
+                            if all_props:
+                                for prop in all_props:
+                                    prop.status = False
+                                    prop.save()
+                                print(f'Deactivated {len(all_props)} properties for user {user.user_id}')
+                        else:
+                            
+                            try:      
+                                if existing_another_plan:                           
+                                    if user.user_type == 'Buyer':
+                                        if not existing_another_plan.buyer_no_unlimited:
+                                            all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                            count = all_cart.count()
+                                            limit = int(existing_another_plan.buyer_no)
+                                            if count <= limit:
+                                                all_cart = None
+                                            else:
+                                                all_cart = all_cart[:count - limit]
+                                        else:
+                                            all_cart = None                                                                  
+
+                                    elif user.user_type == 'Tenant':
+                                        if not existing_another_plan.buyer_no_unlimited:
+                                            all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                                            count = all_cart.count()
+                                            limit = int(existing_another_plan.buyer_no)
+                                            if count <= limit:
+                                                all_cart = None
+                                            else:
+                                                all_cart = all_cart[:count - limit]
+                                        else:
+                                            all_cart = None                                                                        
+
+                                else:
+                                    if user.user_type == 'Buyer':
+                                        all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')                                    
+                                    elif user.user_type == 'Tenant':
+                                        all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')                                    
+                                
+                            except Exception as e:
+                                print(f"Error querying cart for user {user.user_id}: {e}")
+                                all_cart = None                        
+
+                            if all_cart:
+                                for i in all_cart:
+                                    i.status = False
+                                    i.save()
+                                print(f'Deactivated {len(all_cart)} cart items for user {user.user_id}')                        
+
+
+                            try:      
+                                if existing_another_plan:                           
+                                    if user.user_type == 'Buyer':                                                                        
+                                        if not existing_another_plan.matching_enquiry_unlimited:
+                                            all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                            count = all_enquiry_qs.count()
+                                            limit = int(existing_another_plan.matching_enquiry)
+                                            if count <= limit:
+                                                all_enquiry_qs = None
+                                            else:
+                                                all_enquiry_qs = all_enquiry_qs[:count - limit]
+                                        else:
+                                            all_enquiry_qs = None
+
+                                    elif user.user_type == 'Tenant':                                    
+                                        if not existing_another_plan.matching_enquiry_unlimited:
+                                            all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                            count = all_enquiry_qs.count()
+                                            limit = int(existing_another_plan.matching_enquiry)
+                                            if count <= limit:
+                                                all_enquiry_qs = None
+                                            else:
+                                                all_enquiry_qs = all_enquiry_qs[:count - limit]
+                                        else:
+                                            all_enquiry_qs = None                                        
+
+                                else:
+                                    if user.user_type == 'Buyer':                                    
+                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                    elif user.user_type == 'Tenant':                                    
+                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                                
+                            except Exception as e:
+                                print(f"Error querying cart for user {user.user_id}: {e}")                            
+                                all_enquiry_qs = None
+                            if all_enquiry_qs:
+                                for i in all_enquiry_qs:
+                                    i.status = False
+                                    i.save()
+                                print(f'Deactivated {len(all_enquiry_qs)} enquiry items for user {user.user_id}')
+
+                            try:    
+                                if existing_another_plan:
+                                    if user.user_type == 'Buyer':
+                                        if not existing_another_plan.no_of_liked_data_unlimited:
+                                            all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                            count = all_act.count()
+                                            limit = int(existing_another_plan.no_of_liked_data)
+                                            if count <= limit:
+                                                all_act = None
+                                            else:
+                                                all_act = all_act[:count - limit]
+                                        else:
+                                            all_act = None
+                                    elif user.user_type == 'Tenant':
+                                        if not existing_another_plan.no_of_liked_data_unlimited:
+                                            all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                                            count = all_act.count()
+                                            limit = int(existing_another_plan.no_of_liked_data)
+                                            if count <= limit:
+                                                all_act = None
+                                            else:
+                                                all_act = all_act[:count - limit]
+                                        else:
+                                            all_act = None
+                                else:                                                              
+                                    if user.user_type == 'Buyer':
+                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                                    elif user.user_type == 'Tenant':
+                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                            except Exception as e:
+                                print(f"Error querying activities for user {user.user_id}: {e}")
+                                all_act = None
+
+                            if all_act:
+                                for i in all_act:
+                                    i.status = False
+                                    i.save()
+                                print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
+
+                    except Exception as e:
+                        print(f"Error updating property visibility for user {user.user_id}: {e}")
+                                    
             else:
                 updated_count = 0
                 deleted_features_count = 0
@@ -819,76 +1137,7 @@ class AssignFreePlanView(APIView):
         except subAdminplans.DoesNotExist:
             return Response({"error": "Free plan not found"}, status=status.HTTP_400_BAD_REQUEST)
         
-        user_type = plan.user_type
-        now = timezone.now()
-        
-        # Find users who have active subscriptions for this user_type
-        users_with_active_plan = sub_user.objects.filter(
-            user_type=user_type,
-            status=True
-        ).filter(
-            Q(expired_date__isnull=True) | Q(expired_date__gt=now)
-        ).values_list('user_id', flat=True)
-        
-        # Users without active plan for this user_type
-        users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan)
-        
-        assigned_count = 0
-        for user in users_without_plan:
-            # Calculate expired_date
-            if plan.plan_name == 'Lifetime':
-                expired_date = None
-            else:
-                expired_date = now + timedelta(days=plan.trial_days or 0) if plan.trial_days else None
-            
-            # Create sub_user entry
-            sub_user_obj = sub_user(
-                user_id=user,
-                plan_name=plan.plan_name,
-                razor_plan_id=plan.razor_plan_id,
-                user_type=user_type,
-                charges=plan.charges,
-                buyer_no_unlimited=plan.buyer_no_unlimited,
-                buyer_no=plan.buyer_no,
-                no_of_properties_unlimited=plan.no_of_properties_unlimited,
-                no_of_liked_data_unlimited=plan.no_of_liked_data_unlimited,
-                matching_enquiry_unlimited=plan.matching_enquiry_unlimited,
-                no_of_properties=plan.no_of_properties,
-                no_of_liked_data=plan.no_of_liked_data,
-                matching_enquiry=plan.matching_enquiry,
-                expired_date=expired_date,
-                status=True,
-                sub_type='New'
-            )
-            sub_user_obj.save()
-            
-            # Update or create UserFeatures
-            features, created = UserFeatures.objects.get_or_create(
-                user_id=user,
-                user_type=user_type,
-                defaults={
-                    'buyer_no_unlimited': plan.buyer_no_unlimited,
-                    'buyer_no': plan.buyer_no,
-                    'no_of_properties_unlimited': plan.no_of_properties_unlimited,
-                    'no_of_liked_data_unlimited': plan.no_of_liked_data_unlimited,
-                    'matching_enquiry_unlimited': plan.matching_enquiry_unlimited,
-                    'no_of_properties': plan.no_of_properties,
-                    'no_of_liked_data': plan.no_of_liked_data,
-                    'matching_enquiry': plan.matching_enquiry,
-                }
-            )
-            if not created:
-                features.buyer_no_unlimited = plan.buyer_no_unlimited
-                features.buyer_no = features.buyer_no + plan.buyer_no
-                features.no_of_properties_unlimited = plan.no_of_properties_unlimited
-                features.no_of_liked_data_unlimited = plan.no_of_liked_data_unlimited
-                features.matching_enquiry_unlimited = plan.matching_enquiry_unlimited
-                features.no_of_properties = features.no_of_properties + plan.no_of_properties
-                features.no_of_liked_data = features.no_of_liked_data + plan.no_of_liked_data
-                features.matching_enquiry = features.matching_enquiry + plan.matching_enquiry
-                features.save()
-            
-            assigned_count += 1
+        assigned_count = assign_free_plan_to_all_users(plan)
         
         return Response({"message": f"Free plan assigned to {assigned_count} users"}, status=status.HTTP_200_OK)
 
@@ -921,6 +1170,7 @@ class ClaimAllFreePlansView(APIView):
 
             active_exists = sub_user.objects.filter(
                 user_id=user,
+                plan_name='Free',
                 user_type=user_type,
                 status=True
             ).filter(
@@ -969,14 +1219,20 @@ class ClaimAllFreePlansView(APIView):
                 }
             )
             if not created:
-                features.buyer_no_unlimited = plan.buyer_no_unlimited
-                features.buyer_no = plan.buyer_no
-                features.no_of_properties_unlimited = plan.no_of_properties_unlimited
-                features.no_of_liked_data_unlimited = plan.no_of_liked_data_unlimited
-                features.matching_enquiry_unlimited = plan.matching_enquiry_unlimited
-                features.no_of_properties = plan.no_of_properties
-                features.no_of_liked_data = plan.no_of_liked_data
-                features.matching_enquiry = plan.matching_enquiry
+                if not features.buyer_no_unlimited:
+                    features.buyer_no_unlimited = plan.buyer_no_unlimited
+                features.buyer_no = features.buyer_no + plan.buyer_no
+                if not features.no_of_properties_unlimited:
+                    features.no_of_properties_unlimited = plan.no_of_properties_unlimited
+
+                if not features.no_of_liked_data_unlimited:
+                    features.no_of_liked_data_unlimited = plan.no_of_liked_data_unlimited
+
+                if not features.matching_enquiry_unlimited:
+                    features.matching_enquiry_unlimited = plan.matching_enquiry_unlimited
+                features.no_of_properties = features.no_of_properties + plan.no_of_properties
+                features.no_of_liked_data = features.no_of_liked_data + plan.no_of_liked_data
+                features.matching_enquiry = features.matching_enquiry + plan.matching_enquiry
                 features.save()
 
             assigned.append(user_type)

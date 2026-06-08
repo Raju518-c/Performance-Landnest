@@ -398,7 +398,7 @@ class UserListCreateAPIView(APIView):
             total_count = get_total_users_count()
             
             # Apply user_type filter if provided
-            user_filter = {'role': '1'}
+            user_filter = {}
             if user_type_filter:
                 user_filter['user_type'] = user_type_filter
             
@@ -1842,7 +1842,10 @@ class Sub_UserFreePlansView(APIView):
                 if sub_user.objects.filter(user_id=user_id, user_type=user_type, plan_name='Free', status=True).exists():
                     continue
             
-                expired_date = now + relativedelta(days=int(plan.trial_days)) + timedelta(hours=5, minutes=30)
+                if plan.trial_days:
+                    expired_date = now + relativedelta(days=int(plan.trial_days)) + timedelta(hours=5, minutes=30)
+                else:
+                    expired_date = None
 
                 sub_user_data = {
                     'user_id': user_id,
