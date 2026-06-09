@@ -125,6 +125,7 @@ WSGI_APPLICATION = 'landnest.wsgi.application'
 #}
 
 # landnest_test_db
+# landnest_test_08_06_26
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',

@@ -14,5 +14,5 @@ class UsersConfig(AppConfig):
             print(f"Failed to initialize total_users_count: {e}")
         
         # Start background tasks if needed
-        # from . import tasks
-        # tasks.start_thread()
+        from . import tasks
+        tasks.start_thread()

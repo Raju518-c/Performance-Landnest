@@ -424,7 +424,7 @@ def assign_free_plan_to_all_users(plan):
     ).values_list('user_id', flat=True)
     
     # Users without active plan for this user_type
-    users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan, role='1')
+    users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan).exclude(role='1')
     # users_without_plan = User.objects.exclude(user_id__in=users_with_active_plan)
     
     assigned_count = 0
@@ -708,85 +708,85 @@ class SubscriptionAPI(APIView):
                                 print(f'Deactivated {len(all_cart)} cart items for user {user.user_id}')                        
 
 
-                            try:      
-                                if existing_another_plan:                           
-                                    if user.user_type == 'Buyer':                                                                        
-                                        if not existing_another_plan.matching_enquiry_unlimited:
-                                            all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                                            count = all_enquiry_qs.count()
-                                            limit = int(existing_another_plan.matching_enquiry)
-                                            if count <= limit:
-                                                all_enquiry_qs = None
-                                            else:
-                                                all_enquiry_qs = all_enquiry_qs[:count - limit]
-                                        else:
-                                            all_enquiry_qs = None
+                            # try:      
+                            #     if existing_another_plan:                           
+                            #         if user.user_type == 'Buyer':                                                                        
+                            #             if not existing_another_plan.matching_enquiry_unlimited:
+                            #                 all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                            #                 count = all_enquiry_qs.count()
+                            #                 limit = int(existing_another_plan.matching_enquiry)
+                            #                 if count <= limit:
+                            #                     all_enquiry_qs = None
+                            #                 else:
+                            #                     all_enquiry_qs = all_enquiry_qs[:count - limit]
+                            #             else:
+                            #                 all_enquiry_qs = None
 
-                                    elif user.user_type == 'Tenant':                                    
-                                        if not existing_another_plan.matching_enquiry_unlimited:
-                                            all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                                            count = all_enquiry_qs.count()
-                                            limit = int(existing_another_plan.matching_enquiry)
-                                            if count <= limit:
-                                                all_enquiry_qs = None
-                                            else:
-                                                all_enquiry_qs = all_enquiry_qs[:count - limit]
-                                        else:
-                                            all_enquiry_qs = None                                        
+                            #         elif user.user_type == 'Tenant':                                    
+                            #             if not existing_another_plan.matching_enquiry_unlimited:
+                            #                 all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                            #                 count = all_enquiry_qs.count()
+                            #                 limit = int(existing_another_plan.matching_enquiry)
+                            #                 if count <= limit:
+                            #                     all_enquiry_qs = None
+                            #                 else:
+                            #                     all_enquiry_qs = all_enquiry_qs[:count - limit]
+                            #             else:
+                            #                 all_enquiry_qs = None                                        
 
-                                else:
-                                    if user.user_type == 'Buyer':                                    
-                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                                    elif user.user_type == 'Tenant':                                    
-                                        all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                            #     else:
+                            #         if user.user_type == 'Buyer':                                    
+                            #             all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
+                            #         elif user.user_type == 'Tenant':                                    
+                            #             all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
                                 
-                            except Exception as e:
-                                print(f"Error querying cart for user {user.user_id}: {e}")                            
-                                all_enquiry_qs = None
-                            if all_enquiry_qs:
-                                for i in all_enquiry_qs:
-                                    i.status = False
-                                    i.save()
-                                print(f'Deactivated {len(all_enquiry_qs)} enquiry items for user {user.user_id}')
+                            # except Exception as e:
+                            #     print(f"Error querying cart for user {user.user_id}: {e}")                            
+                            #     all_enquiry_qs = None
+                            # if all_enquiry_qs:
+                            #     for i in all_enquiry_qs:
+                            #         i.status = False
+                            #         i.save()
+                            #     print(f'Deactivated {len(all_enquiry_qs)} enquiry items for user {user.user_id}')
 
-                            try:    
-                                if existing_another_plan:
-                                    if user.user_type == 'Buyer':
-                                        if not existing_another_plan.no_of_liked_data_unlimited:
-                                            all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
-                                            count = all_act.count()
-                                            limit = int(existing_another_plan.no_of_liked_data)
-                                            if count <= limit:
-                                                all_act = None
-                                            else:
-                                                all_act = all_act[:count - limit]
-                                        else:
-                                            all_act = None
-                                    elif user.user_type == 'Tenant':
-                                        if not existing_another_plan.no_of_liked_data_unlimited:
-                                            all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                                            count = all_act.count()
-                                            limit = int(existing_another_plan.no_of_liked_data)
-                                            if count <= limit:
-                                                all_act = None
-                                            else:
-                                                all_act = all_act[:count - limit]
-                                        else:
-                                            all_act = None
-                                else:                                                              
-                                    if user.user_type == 'Buyer':
-                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
-                                    elif user.user_type == 'Tenant':
-                                        all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                            except Exception as e:
-                                print(f"Error querying activities for user {user.user_id}: {e}")
-                                all_act = None
+                            # try:    
+                            #     if existing_another_plan:
+                            #         if user.user_type == 'Buyer':
+                            #             if not existing_another_plan.no_of_liked_data_unlimited:
+                            #                 all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                            #                 count = all_act.count()
+                            #                 limit = int(existing_another_plan.no_of_liked_data)
+                            #                 if count <= limit:
+                            #                     all_act = None
+                            #                 else:
+                            #                     all_act = all_act[:count - limit]
+                            #             else:
+                            #                 all_act = None
+                            #         elif user.user_type == 'Tenant':
+                            #             if not existing_another_plan.no_of_liked_data_unlimited:
+                            #                 all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                            #                 count = all_act.count()
+                            #                 limit = int(existing_another_plan.no_of_liked_data)
+                            #                 if count <= limit:
+                            #                     all_act = None
+                            #                 else:
+                            #                     all_act = all_act[:count - limit]
+                            #             else:
+                            #                 all_act = None
+                            #     else:                                                              
+                            #         if user.user_type == 'Buyer':
+                            #             all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
+                            #         elif user.user_type == 'Tenant':
+                            #             all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
+                            # except Exception as e:
+                            #     print(f"Error querying activities for user {user.user_id}: {e}")
+                            #     all_act = None
 
-                            if all_act:
-                                for i in all_act:
-                                    i.status = False
-                                    i.save()
-                                print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
+                            # if all_act:
+                            #     for i in all_act:
+                            #         i.status = False
+                            #         i.save()
+                            #     print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
 
                     except Exception as e:
                         print(f"Error updating property visibility for user {user.user_id}: {e}")

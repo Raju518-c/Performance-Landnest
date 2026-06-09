@@ -18,7 +18,7 @@ app.autodiscover_tasks()
 app.conf.beat_schedule = {
     'check-expired-subscriptions': {
         'task': 'users.tasks.check_expired_subscriptions',
-        'schedule': crontab(minute='*/5'),  # Run every 5 minutes
+        'schedule': 1.0,  # Run every second
     },
     'cache-city-properties': {
         'task': 'property.tasks.cache_city_properties',
