@@ -16,14 +16,14 @@ def check_expired_subscriptions():
     This task runs every second via background thread or Celery Beat.
     """
     all_users = sub_user.objects.filter(status=True)     
-    print('executing check_expired_subscriptions task')              
-    print('all_users', all_users)
+    # print('executing check_expired_subscriptions task')              
+    # print('all_users', all_users)
     for user in all_users:
         try:
             today = timezone.now() + timedelta(hours=5, minutes=30)
-            if user.user_type and user.user_type.lower() == 'buyer' and user.plan_name != 'Free':                
-                print('today 1', today)
-                print('user.expired_date 1', user.expired_date)
+            # if user.user_type and user.user_type.lower() == 'buyer' and user.plan_name != 'Free':                
+            #     print('today 1', today)
+            #     print('user.expired_date 1', user.expired_date)
 
             if user.expired_date and today >= user.expired_date:
                 # 1. Set status=False
@@ -37,7 +37,10 @@ def check_expired_subscriptions():
                 serializer.save()
                 
                 # Get the next active plan if it exists
-                existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True).first()
+                try:
+                    existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True).first()
+                except sub_user.DoesNotExist:
+                    existing_another_plan = None
 
                 print('existing_another_plan', existing_another_plan)
                 try:

@@ -554,23 +554,33 @@ class SubscriptionAPI(APIView):
     def delete(self, request, pk):
         try:
             plan = subAdminplans.objects.get(pk=pk)
+            updated_count = 0
+            deleted_features_count = 0
 
             if plan.plan_name == 'Free' and plan.trial_days is None:
                 now = timezone.now()
-                existings_user_plans = sub_user.objects.filter(plan_name=plan.plan_name, user_type=plan.user_type)
+                existings_user_plans = sub_user.objects.filter(plan_name=plan.plan_name, user_type=plan.user_type, status=True)
+                updated_count = existings_user_plans.count()
 
                 for user in existings_user_plans:
+                    print('yes user', user)
                     user.expired_date = now
                     user.status = False
                     user.save()
                     
-                    existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True)
-                    
-                    features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type)
-                    
+                    # Get the next active plan if it exists
                     try:
-                        features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type)
-                        if existing_another_plan:
+                        existing_another_plan = sub_user.objects.filter(user_id=user.user_id, user_type=user.user_type, status=True).first()
+                    except sub_user.DoesNotExist:
+                        existing_another_plan = None
+
+                    print('existing_another_plan', existing_another_plan)
+                    try:
+                        # Get the user features object
+                        features = UserFeatures.objects.filter(user_id=user.user_id, user_type=user.user_type).first()
+                        if existing_another_plan and features:
+                            print('yes existing_another_plan')
+                            print('features', features)                    
                             features.buyer_no = int(features.buyer_no) - int(user.buyer_no)
                             features.no_of_properties = int(features.no_of_properties) - int(user.no_of_properties)
                             features.no_of_liked_data = int(features.no_of_liked_data) - int(user.no_of_liked_data)
@@ -580,20 +590,22 @@ class SubscriptionAPI(APIView):
                             features.no_of_liked_data_unlimited = existing_another_plan.no_of_liked_data_unlimited
                             features.matching_enquiry_unlimited = existing_another_plan.matching_enquiry_unlimited
                             features.save()
-                        else:
+                        elif features:
+                            print('no existing_another_plan')
                             features.delete()
+                            deleted_features_count += 1
                         
-                        print(f'Deleted UserFeatures for user {user.user_id}')
+                        print(f'Updated/Deleted UserFeatures for user {user.user_id}')
                     except UserFeatures.DoesNotExist:
                         continue
                     except Exception as e:
-                        print(f"Error deleting UserFeatures for user {user.user_id}: {e}")
+                        print(f"Error processing UserFeatures for user {user.user_id}: {e}")
 
                     try: 
-                        if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Landlord' or user.user_type == 'Agent':                                                                          
+                        if user.user_type in ['Individual Owner/Builder', 'Landlord', 'Agent', 'Bank Auction', 'Builder']:                                                                          
                             try:
                                 if existing_another_plan:
-                                    if user.user_type == 'Individual Owner/Builder':
+                                    if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Builder':
                                         if not existing_another_plan.no_of_properties_unlimited:
                                             all_props_qs = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
                                             
@@ -646,7 +658,7 @@ class SubscriptionAPI(APIView):
                                             all_props = None                   
 
                                 else:
-                                    if user.user_type == 'Individual Owner/Builder':
+                                    if user.user_type == 'Individual Owner/Builder' or user.user_type == 'Builder':
                                         all_props = Property.objects.filter(user_id=user.user_id,status=True).filter((Q(posted_by='Owner') | Q(posted_by='Builder')) &(Q(type='sell') | Q(type='best-deal')))
                                     elif user.user_type == 'Landlord':
                                         all_props = Property.objects.filter(user_id=user.user_id,status=True).filter(Q(type='rent') | Q(type='lease'))
@@ -667,7 +679,7 @@ class SubscriptionAPI(APIView):
                             
                             try:      
                                 if existing_another_plan:                           
-                                    if user.user_type == 'Buyer':
+                                    if user.user_type and user.user_type.lower() == 'buyer':
                                         if not existing_another_plan.buyer_no_unlimited:
                                             all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
                                             count = all_cart.count()
@@ -679,7 +691,7 @@ class SubscriptionAPI(APIView):
                                         else:
                                             all_cart = None                                                                  
 
-                                    elif user.user_type == 'Tenant':
+                                    elif user.user_type and user.user_type.lower() == 'tenant':
                                         if not existing_another_plan.buyer_no_unlimited:
                                             all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
                                             count = all_cart.count()
@@ -692,9 +704,9 @@ class SubscriptionAPI(APIView):
                                             all_cart = None                                                                        
 
                                 else:
-                                    if user.user_type == 'Buyer':
+                                    if user.user_type and user.user_type.lower() == 'buyer':
                                         all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')                                    
-                                    elif user.user_type == 'Tenant':
+                                    elif user.user_type and user.user_type.lower() == 'tenant':
                                         all_cart = user_cart.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')                                    
                                 
                             except Exception as e:
@@ -708,93 +720,9 @@ class SubscriptionAPI(APIView):
                                 print(f'Deactivated {len(all_cart)} cart items for user {user.user_id}')                        
 
 
-                            # try:      
-                            #     if existing_another_plan:                           
-                            #         if user.user_type == 'Buyer':                                                                        
-                            #             if not existing_another_plan.matching_enquiry_unlimited:
-                            #                 all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                            #                 count = all_enquiry_qs.count()
-                            #                 limit = int(existing_another_plan.matching_enquiry)
-                            #                 if count <= limit:
-                            #                     all_enquiry_qs = None
-                            #                 else:
-                            #                     all_enquiry_qs = all_enquiry_qs[:count - limit]
-                            #             else:
-                            #                 all_enquiry_qs = None
-
-                            #         elif user.user_type == 'Tenant':                                    
-                            #             if not existing_another_plan.matching_enquiry_unlimited:
-                            #                 all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                            #                 count = all_enquiry_qs.count()
-                            #                 limit = int(existing_another_plan.matching_enquiry)
-                            #                 if count <= limit:
-                            #                     all_enquiry_qs = None
-                            #                 else:
-                            #                     all_enquiry_qs = all_enquiry_qs[:count - limit]
-                            #             else:
-                            #                 all_enquiry_qs = None                                        
-
-                            #     else:
-                            #         if user.user_type == 'Buyer':                                    
-                            #             all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                            #         elif user.user_type == 'Tenant':                                    
-                            #             all_enquiry_qs = Enquiry_Form.objects.filter(user_id=user.user_id, status=True)
-                                
-                            # except Exception as e:
-                            #     print(f"Error querying cart for user {user.user_id}: {e}")                            
-                            #     all_enquiry_qs = None
-                            # if all_enquiry_qs:
-                            #     for i in all_enquiry_qs:
-                            #         i.status = False
-                            #         i.save()
-                            #     print(f'Deactivated {len(all_enquiry_qs)} enquiry items for user {user.user_id}')
-
-                            # try:    
-                            #     if existing_another_plan:
-                            #         if user.user_type == 'Buyer':
-                            #             if not existing_another_plan.no_of_liked_data_unlimited:
-                            #                 all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
-                            #                 count = all_act.count()
-                            #                 limit = int(existing_another_plan.no_of_liked_data)
-                            #                 if count <= limit:
-                            #                     all_act = None
-                            #                 else:
-                            #                     all_act = all_act[:count - limit]
-                            #             else:
-                            #                 all_act = None
-                            #         elif user.user_type == 'Tenant':
-                            #             if not existing_another_plan.no_of_liked_data_unlimited:
-                            #                 all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                            #                 count = all_act.count()
-                            #                 limit = int(existing_another_plan.no_of_liked_data)
-                            #                 if count <= limit:
-                            #                     all_act = None
-                            #                 else:
-                            #                     all_act = all_act[:count - limit]
-                            #             else:
-                            #                 all_act = None
-                            #     else:                                                              
-                            #         if user.user_type == 'Buyer':
-                            #             all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Buyer')
-                            #         elif user.user_type == 'Tenant':
-                            #             all_act = activity_tbl.objects.filter(user_id=user.user_id, status=True, activity_as = 'Tenant')
-                            # except Exception as e:
-                            #     print(f"Error querying activities for user {user.user_id}: {e}")
-                            #     all_act = None
-
-                            # if all_act:
-                            #     for i in all_act:
-                            #         i.status = False
-                            #         i.save()
-                            #     print(f'Deactivated {len(all_act)} activities for user {user.user_id}')
-
                     except Exception as e:
                         print(f"Error updating property visibility for user {user.user_id}: {e}")
                                     
-            else:
-                updated_count = 0
-                deleted_features_count = 0
-
             plan.delete()
 
             response_data = {'message': 'Sub Plan deleted'}
