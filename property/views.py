@@ -194,13 +194,14 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
     
     return data, total_count
 
-def build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number):
+def build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number, user_id=None):
     safe_search = re.sub(r'[^A-Za-z0-9_]+', '_', (search_query or '').strip().lower()) if search_query else 'all'
     safe_looking = re.sub(r'[^A-Za-z0-9_]+', '_', (looking_for_filter or '').strip().lower()) if looking_for_filter else 'all'
     safe_prop_type = re.sub(r'[^A-Za-z0-9_]+', '_', (property_type_filter or '').strip().lower()) if property_type_filter else 'all'
-    return f"wanted_search_v2_{safe_search}_{safe_looking}_{safe_prop_type}_{page}_{page_size}_{chunk}_{chunk_number}"
+    safe_user = user_id if user_id else 'all'
+    return f"wanted_search_v2_{safe_search}_{safe_looking}_{safe_prop_type}_{safe_user}_{page}_{page_size}_{chunk}_{chunk_number}"
 
-def perform_meilisearch_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size):
+def perform_meilisearch_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size, user_id=None):
     index = get_meilisearch_wanted_index()
     if not index:
         return None, None
@@ -210,6 +211,8 @@ def perform_meilisearch_property_requests(search_query, looking_for_filter, prop
         filter_clauses.append(f'looking_for = "{looking_for_filter}"')
     if property_type_filter:
         filter_clauses.append(f'property_type = "{property_type_filter}"')
+    if user_id:
+        filter_clauses.append(f'user_id = {user_id}')
 
     options = {
         'filter': filter_clauses if filter_clauses else None,
@@ -227,21 +230,23 @@ def perform_meilisearch_property_requests(search_query, looking_for_filter, prop
     except Exception:
         return None, None
 
-def perform_db_search_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size):
+def perform_db_search_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size, user_id=None):
     queryset = PropertyRequest.objects.all().select_related('user_id').prefetch_related('pro_loc').only(
-        'req_id', 'user_id', 'looking_for', 'property_type', 'min_budget', 'max_budget', 
+        'req_id', 'user_id', 'looking_for', 'property_type', 'min_budget', 'max_budget',
         'no_of_bedrooms', 'area', 'units', 'created_at', 'updated_at',
         'user_id__first_name', 'user_id__last_name', 'user_id__mobile_no', 'user_id__email'
     )
-    
+
+    if user_id:
+        queryset = queryset.filter(user_id=user_id)
     if looking_for_filter:
         queryset = queryset.filter(looking_for__iexact=looking_for_filter)
     if property_type_filter:
         queryset = queryset.filter(property_type__iexact=property_type_filter)
-    
+
     if search_query:
         search_query_lower = search_query.lower().strip()
-        
+
         # Optimization: If query is exactly a known categorical value, use exact matching
         if search_query_lower in ['purchase', 'rent', 'lease', 'jv/jd', 'build to suit']:
             search_q = Q(looking_for__iexact=search_query_lower)
@@ -254,21 +259,21 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
                 Q(pro_loc__location__icontains=search_query) |
                 Q(comment__icontains=search_query)
             )
-        
+
         # Numeric searches for BHK/Bedrooms
         digit_match = re.search(r'(\d+)', search_query)
         if digit_match:
             val = int(digit_match.group(1))
             if 'bedroom' in search_query.lower():
                 search_q |= Q(no_of_bedrooms=val)
-        
+
         queryset = queryset.filter(search_q).distinct()
 
     # Cache the count for search results as it's slow for large datasets
-    if search_query:
-        cache_key = f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{looking_for_filter}_{property_type_filter}"
+    if search_query or user_id:
+        cache_key = f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{looking_for_filter}_{property_type_filter}_{user_id}"
         total_count = cache_manager.get(cache_key)
-        
+
         if total_count is None:
             total_count = queryset.count()
             cache_manager.set(cache_key, total_count, 3600)
@@ -278,7 +283,7 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
         total_count = get_total_property_requests_count()
 
     objs = queryset[actual_offset:actual_offset + actual_page_size]
-    
+
     data = []
     for obj in objs:
         loc = obj.pro_loc.first()
@@ -300,7 +305,7 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
             'created_at': obj.created_at,
             'updated_at': obj.updated_at,
         })
-    
+
     return data, total_count
 
 def build_bank_search_cache_key(search_query, property_type_filter, page, page_size, chunk, chunk_number):
@@ -933,7 +938,16 @@ class PropertyRequestCRUD(APIView):
             page_size = int(request.GET.get('page_size', 20))
             chunk = int(request.GET.get('chunk', 100))
             offset = (page - 1) * page_size
-            
+
+            # Get user_id filter and convert to int, handling trailing slashes
+            user_id_param = request.GET.get('user_id', None)
+            user_id = None
+            if user_id_param:
+                try:
+                    user_id = int(user_id_param.strip().rstrip('/'))
+                except (ValueError, AttributeError):
+                    pass
+
             # Get filtering parameters
             looking_for_filter = request.GET.get('looking_for', '')
             property_type_filter = request.GET.get('property_type', '')
@@ -954,8 +968,8 @@ class PropertyRequestCRUD(APIView):
                 chunk_number = 0
 
             # Determine cache key
-            cache_key = build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number)
-            
+            cache_key = build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number, user_id)
+
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
             if cached_data:
@@ -966,18 +980,21 @@ class PropertyRequestCRUD(APIView):
 
             if search_query:
                 data, total_count = perform_meilisearch_property_requests(
-                    search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size
+                    search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size, user_id
                 )
                 if data is None:
                     data, total_count = perform_db_search_property_requests(
-                        search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size
+                        search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size, user_id
                     )
             else:
                 # Get total count (fast)
                 total_count = get_total_property_requests_count()
-                
+
                 # Apply filters
                 queryset = PropertyRequest.objects.all().select_related('user_id').prefetch_related('pro_loc')
+                if user_id:
+                    queryset = queryset.filter(user_id=user_id)
+                    total_count = queryset.count()
                 if looking_for_filter:
                     queryset = queryset.filter(looking_for__iexact=looking_for_filter)
                     total_count = queryset.count()
