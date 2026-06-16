@@ -198,7 +198,7 @@ def build_wanted_property_cache_key(search_query, looking_for_filter, property_t
     safe_search = re.sub(r'[^A-Za-z0-9_]+', '_', (search_query or '').strip().lower()) if search_query else 'all'
     safe_looking = re.sub(r'[^A-Za-z0-9_]+', '_', (looking_for_filter or '').strip().lower()) if looking_for_filter else 'all'
     safe_prop_type = re.sub(r'[^A-Za-z0-9_]+', '_', (property_type_filter or '').strip().lower()) if property_type_filter else 'all'
-    return f"wanted_search_{safe_search}_{safe_looking}_{safe_prop_type}_{page}_{page_size}_{chunk}_{chunk_number}"
+    return f"wanted_search_v2_{safe_search}_{safe_looking}_{safe_prop_type}_{page}_{page_size}_{chunk}_{chunk_number}"
 
 def perform_meilisearch_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size):
     index = get_meilisearch_wanted_index()
@@ -921,7 +921,8 @@ class PropertyRequestCRUD(APIView):
 
     
     def get(self, request, pk=None):
-        try:            
+        try:          
+            print('PropertyRequestCRUD')  
             if pk:
                 obj = PropertyRequest.objects.get(pk=pk)
                 serializer = PropertyRequestSerializer(obj)
@@ -990,6 +991,7 @@ class PropertyRequestCRUD(APIView):
                 serializer = PropertyRequestSerializer(objs, many=True)
                 data = serializer.data
 
+            print('PropertyRequestSerializer 2')
             total_pages = (total_count + page_size - 1) // page_size
             has_next = page < total_pages
             has_previous = page > 1

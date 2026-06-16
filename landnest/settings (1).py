@@ -26,23 +26,15 @@ SECRET_KEY = 'django-insecure-nq5qc7hflm1!8p6jt4j4wfh8b(njpstrb(_=*xr&4w9s5!to77
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-
 ALLOWED_HOSTS = ['*']
 
+#CSRF_TRUSTED_ORIGINS = [
+ #   "https://landnest.net:81",
+#]
 CSRF_TRUSTED_ORIGINS = [
     'https://landnest.net:81',
     'http://landnest.net:81',
-    'http://69.62.76.211:92',
-
-    'https://propertypincoder.in',
-    'https://www.propertypincoder.in',
-    'https://test.propertypincoder.in',
-
-    'http://propertypincoder.in',
-    'http://www.propertypincoder.in',
-    'http://test.propertypincoder.in',
 ]
-
 
 CORS_ALLOW_HEADERS = [
     "content-type",
@@ -53,7 +45,6 @@ CORS_ALLOW_HEADERS = [
 
 CORS_ALLOWED_ORIGINS = [
     "https://app.propertypincoder.com",
-    "http://localhost:3000",
 ]
 
 # Application definition
