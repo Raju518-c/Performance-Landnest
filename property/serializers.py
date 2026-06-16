@@ -166,12 +166,23 @@ class PropertyRequestSerializer(serializers.ModelSerializer):
     user_mobile_no = serializers.CharField(source='user_id.mobile_no', read_only=True)
     user_username = serializers.CharField(source='user_id.username', read_only=True)
 
+    # Combined locations string field
+    locations_str = serializers.SerializerMethodField()
+
     # Use the typed nested serializer so swagger shows exact keys instead of additionalPropX
     new_locations = NewLocationSerializer(many=True, write_only=True, required=False)
 
     class Meta:
         model = PropertyRequest
         fields = '__all__'
+
+    def get_locations_str(self, obj):
+        """
+        Get all locations combined as a comma-separated string
+        """
+        locations = obj.pro_loc.all()
+        location_str = ', '.join([loc.location for loc in locations if loc.location]) if locations else '-'
+        return location_str
 
     def create(self, validated_data):
         new_locations = validated_data.pop('new_locations', [])

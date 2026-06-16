@@ -260,11 +260,12 @@ def cache_result(timeout=None, key_generator=None):
 
 # Helper functions for user caching
 def initialize_total_users_count():
+    print('Initializing total users count')
     """Initialize global total users count on server start"""
     global total_users_count, user_type_counts
     try:
         from users.models import User
-        total_users_count = User.objects.filter(role='1').count()
+        total_users_count = User.objects.filter(role='User').count()
         logger.info(f"Initialized total_users_count: {total_users_count}")
         
         # Initialize user_type counts
@@ -275,10 +276,11 @@ def initialize_total_users_count():
 
 def initialize_user_type_counts():
     """Initialize global user_type counts on server start"""
+    print('Initializing user type counts')
     global user_type_counts
     try:
         from users.models import User
-        users = User.objects.filter(role='1')
+        users = User.objects.filter(role='User')
         
         # Count by user_type
         for user_type in user_type_counts:
@@ -299,6 +301,7 @@ def get_total_users_count():
     global total_users_count
     if total_users_count is None:
         # Initialize if not set
+        print('total_users_count')
         initialize_total_users_count()
     return total_users_count or 0
 
@@ -307,6 +310,7 @@ def get_user_type_count(user_type):
     global user_type_counts
     if user_type_counts.get(user_type) is None:
         # Initialize if not set
+        print(f'Initializing count for user type: {user_type}')
         initialize_user_type_counts()
     return user_type_counts.get(user_type, 0)
 

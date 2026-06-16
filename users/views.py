@@ -71,7 +71,7 @@ def build_search_cache_key(search_query, user_type_filter, page, page_size, chun
 
 
 def get_user_filter(user_type_filter):
-    user_filter = {'role': '1'}
+    user_filter = {'role': 'User'}
     if user_type_filter:
         if user_type_filter == 'Old Users':
             user_filter['user_type'] = None
@@ -81,17 +81,21 @@ def get_user_filter(user_type_filter):
 
 
 def perform_meilisearch_users(search_query, user_type_filter, actual_offset, actual_page_size):
+    print('user_type_filter', user_type_filter)
     index = get_meilisearch_user_index()
     if not index:
         return None, None
 
-    filter_clauses = ['role = 1']
+    filter_clauses = ['role = "User"']
     if user_type_filter:
         if user_type_filter == 'Old Users':
             filter_clauses.append('user_type IS NULL')
         else:
             filter_clauses.append(f'user_type = "{user_type_filter}"')
 
+    print('user_type_filter 2', user_type_filter)
+    print('search_query 2', search_query)
+    print('filter_clauses 2', filter_clauses)
     options = {
         'filter': filter_clauses,
         'attributesToRetrieve': MEILISEARCH_DISPLAYED_ATTRIBUTES,
@@ -111,7 +115,10 @@ def perform_meilisearch_users(search_query, user_type_filter, actual_offset, act
 
 
 def perform_db_search_users(search_query, user_type_filter, actual_offset, actual_page_size):
+    print('user_type_filter 3', user_type_filter)
+    print('search_query 3', search_query)
     user_filter = get_user_filter(user_type_filter)
+    print('user_filter', user_filter)
     search_q = (
         Q(first_name__icontains=search_query) |
         Q(last_name__icontains=search_query) |
@@ -121,6 +128,7 @@ def perform_db_search_users(search_query, user_type_filter, actual_offset, actua
         Q(city__icontains=search_query) |
         Q(user_type__icontains=search_query)
     )
+    print('search_q', search_q)
     queryset = User.objects.filter(**user_filter).filter(search_q).prefetch_related(
         'user_features', 'user_properties', 'user_prop_req', 'user_best_deals'
     )
@@ -318,7 +326,7 @@ class UserListCreateAPIView(APIView):
             search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
@@ -353,7 +361,8 @@ class UserListCreateAPIView(APIView):
                 except (json.JSONDecodeError, TypeError):
                     pass  # Invalid cache data, continue with database query
             
-            if search_query:
+            print('search_query', search_query)
+            if search_query:                
                 users_data, total_count = perform_meilisearch_users(
                     search_query,
                     user_type_filter,
@@ -595,8 +604,9 @@ class UserGetUserTypeAPIView(APIView):
             user_type_filter = request.GET.get('user_type', '')
             search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
             
+            print('user_type_filter', user_type_filter)
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
@@ -606,6 +616,7 @@ class UserGetUserTypeAPIView(APIView):
             # Sanitize user_type for cache key (remove spaces and special characters)
             safe_user_type = user_type_filter.replace(' ', '_').replace('/', '_').replace('%', '_') if user_type_filter else 'all'
             
+            print('safe_user_type', safe_user_type)
             if page_size > 100 and request.GET.get('chunk_number') is not None:
                 # Progressive loading for any page with chunk_number parameter
                 actual_page_size = chunk
@@ -623,6 +634,7 @@ class UserGetUserTypeAPIView(APIView):
                 if page_size > 100 and request.GET.get('chunk_number') is not None:
                     cache_key = f"users_type_{safe_user_type}_{page}_{page_size}_{chunk}_{chunk_number}"
                 else:
+                    print('no cache, page<100')
                     cache_key = f"users_type_{safe_user_type}_{page}_{page_size}"
             
             # Try to get from cache first
@@ -678,7 +690,7 @@ class UserGetUserTypeAPIView(APIView):
             total_count = get_user_type_count(user_type_filter) if user_type_filter else get_total_users_count()
             
             # Apply user_type filter
-            user_filter = {'role': '1'}
+            user_filter = {}
             if user_type_filter:
                 if user_type_filter == 'Old Users':
                     user_filter['user_type'] = None
@@ -738,7 +750,7 @@ class UserGetUserTypeAPIView(APIView):
 
             # Redirect to GET method with pagination
             # For backward compatibility, return all users without pagination
-            user_filter = {'role': '1'}
+            user_filter = {'role': 'User'}
             if user_type == 'Old Users':
                 user_filter['user_type'] = None
             else:
@@ -1265,7 +1277,7 @@ class ConsultantReqView(APIView):
             search_query = normalize_search_query(request.GET.get('search_query') or request.GET.get('search') or '')
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             

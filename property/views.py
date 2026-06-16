@@ -49,7 +49,7 @@ def build_property_cache_key(search_query, property_type_filter, type_filter, pa
     safe_type = re.sub(r'[^A-Za-z0-9_]+', '_', (type_filter or '').strip().lower()) if type_filter else 'all'
     return f"property_search_{safe_search}_{safe_prop_type}_{safe_type}_{page}_{page_size}_{chunk}_{chunk_number}"
 
-def perform_meilisearch_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None):
+def perform_meilisearch_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
     index = get_meilisearch_property_index()
     if not index:
         return None, None
@@ -63,6 +63,10 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
         filter_clauses.append(f'property_type = "{property_type_filter}"')
     if type_filter:
         filter_clauses.append(f'type = "{type_filter}"')
+    if posted_by:
+        filter_clauses.append(f'posted_by = "{posted_by}"')
+    if exclude_posted_by:
+        filter_clauses.append(f'posted_by != "{exclude_posted_by}"')
     
     # Add price range filters
     if price_min is not None:
@@ -86,7 +90,7 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
     except Exception:
         return None, None
 
-def perform_db_search_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None):
+def perform_db_search_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
     # BASE FILTERS: Approved status is MANDATORY
     queryset = Property.objects.all()
     
@@ -104,6 +108,10 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
         queryset = queryset.filter(property_type__iexact=property_type_filter)
     if type_filter:
         queryset = queryset.filter(type__iexact=type_filter)
+    if posted_by:
+        queryset = queryset.filter(posted_by__iexact=posted_by)
+    if exclude_posted_by:
+        queryset = queryset.exclude(posted_by__iexact=exclude_posted_by)
     
     # Add price range filters to DB search
     if price_min is not None:
@@ -470,6 +478,8 @@ class PropertyAPIView(APIView):
             page_size = int(request.GET.get('page_size', 20))
             chunk = int(request.GET.get('chunk', 100))
             offset = (page - 1) * page_size
+            posted_by = request.GET.get('posted_by', None)
+            exclude_posted_by = request.GET.get('exclude_posted_by', None)
             
             # Get filtering parameters
             property_type_filter = request.GET.get('property_type', '')
@@ -481,11 +491,13 @@ class PropertyAPIView(APIView):
             price_max = request.GET.get('price_max')
             exclude_role = request.GET.get('exclude_role')
             
-            # Determine cache key with price filters
-            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}"
+            print('exclude_role', exclude_role)
+            print('posted_by', posted_by)
+            # Determine cache key with price filters and posted_by
+            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}"
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
@@ -520,52 +532,50 @@ class PropertyAPIView(APIView):
             if search_query:
                 data, total_count = perform_meilisearch_properties(
                     search_query, property_type_filter, type_filter, actual_offset, actual_page_size,
-                    price_min=price_min, price_max=price_max, exclude_role=exclude_role
+                    price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
                 )
                 if data is None:
                     data, total_count = perform_db_search_properties(
                         search_query, property_type_filter, type_filter, actual_offset, actual_page_size,
-                        price_min=price_min, price_max=price_max, exclude_role=exclude_role
+                        price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
                     )
             else:
-                # Get total count (fast)
-                if property_type_filter and type_filter:
-                    total_count = get_property_filter_count_fast(property_type_filter, type_filter)
-                elif property_type_filter:
-                    total_count = get_property_type_count_fast(property_type_filter)
-                elif type_filter:
-                    total_count = get_type_count_fast(type_filter)
-                else:
-                    total_count = get_total_properties_count_fast()
-                
-                # Apply base filters
+                # Apply base filters and compute counts
                 queryset = Property.objects.all()
-                
+
                 if exclude_role:
                     queryset = queryset.exclude(user_id__role=exclude_role)
-                    
+
                 queryset = queryset.select_related('user_id', 'category_id').only(
                     'property_id', 'property_name', 'location', 'posted_by', 'property_type', 
                     'type', 'facing', 'site_area', 'price', 'units', 'mobile_no',
                     'user_id__first_name', 'user_id__last_name', 'user_id__mobile_no', 'user_id__email',
                     'category_id__category', 'Admin_status'
                 )
-                
+
                 if property_type_filter:
                     queryset = queryset.filter(property_type__iexact=property_type_filter)
                 if type_filter:
                     queryset = queryset.filter(type__iexact=type_filter)
-                
+
+                # Apply posted_by / exclude_posted_by filter if provided
+                if posted_by:
+                    queryset = queryset.filter(posted_by__iexact=posted_by)
+                if exclude_posted_by:
+                    queryset = queryset.exclude(posted_by__iexact=exclude_posted_by)
+
                 # Add price filters to base query if provided without search
                 if price_min is not None:
                     queryset = queryset.filter(price__gte=price_min)
                 if price_max is not None:
                     queryset = queryset.filter(price__lte=price_max)
-                
-                # Recalculate count if price filters are applied (they aren't in the global fast counts)
-                if price_min or price_max:
+
+                # Compute total_count: if any limiting filter is present, recalc
+                if price_min or price_max or posted_by or exclude_role or property_type_filter or type_filter:
                     total_count = queryset.count()
-                
+                else:
+                    total_count = get_total_properties_count_fast()
+
                 objs = queryset[actual_offset:actual_offset + actual_page_size]
                 serializer = PropertySerializer(objs, many=True)
                 data = serializer.data
@@ -819,7 +829,7 @@ class PropertyRequestTypeAPIView(APIView):
             search_query = request.GET.get('search_query') or request.GET.get('search') or ''
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
@@ -871,27 +881,9 @@ class PropertyRequestTypeAPIView(APIView):
                 
                 objs = queryset[actual_offset:actual_offset + actual_page_size]
                 
-                data = []
-                for obj in objs:
-                    loc = obj.pro_loc.first()
-                    data.append({
-                        'req_id': obj.req_id,
-                        'user_id': obj.user_id_id,
-                        'user_first_name': obj.user_id.first_name if obj.user_id else '',
-                        'user_last_name': obj.user_id.last_name if obj.user_id else '',
-                        'user_mobile_no': obj.user_id.mobile_no if obj.user_id else '',
-                        'user_email': obj.user_id.email if obj.user_id else '',
-                        'looking_for': obj.looking_for,
-                        'property_type': obj.property_type,
-                        'min_budget': obj.min_budget,
-                        'max_budget': obj.max_budget,
-                        'no_of_bedrooms': obj.no_of_bedrooms,
-                        'location': loc.location if loc else '-',
-                        'area': obj.area,
-                        'units': obj.units,
-                        'created_at': obj.created_at,
-                        'updated_at': obj.updated_at,
-                    })
+                # Use serializer to return complete object with all locations
+                serializer = PropertyRequestSerializer(objs, many=True)
+                data = serializer.data
 
             total_pages = (total_count + page_size - 1) // page_size
             has_next = page < total_pages
@@ -947,7 +939,7 @@ class PropertyRequestCRUD(APIView):
             search_query = request.GET.get('search_query') or request.GET.get('search') or ''
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
@@ -994,27 +986,9 @@ class PropertyRequestCRUD(APIView):
                 
                 objs = queryset[actual_offset:actual_offset + actual_page_size]
                 
-                data = []
-                for obj in objs:
-                    loc = obj.pro_loc.first()
-                    data.append({
-                        'req_id': obj.req_id,
-                        'user_id': obj.user_id_id,
-                        'user_first_name': obj.user_id.first_name if obj.user_id else '',
-                        'user_last_name': obj.user_id.last_name if obj.user_id else '',
-                        'user_mobile_no': obj.user_id.mobile_no if obj.user_id else '',
-                        'user_email': obj.user_id.email if obj.user_id else '',
-                        'looking_for': obj.looking_for,
-                        'property_type': obj.property_type,
-                        'min_budget': obj.min_budget,
-                        'max_budget': obj.max_budget,
-                        'no_of_bedrooms': obj.no_of_bedrooms,
-                        'location': loc.location if loc else '-',
-                        'area': obj.area,
-                        'units': obj.units,
-                        'created_at': obj.created_at,
-                        'updated_at': obj.updated_at,
-                    })
+                # Use serializer to return complete object with all locations
+                serializer = PropertyRequestSerializer(objs, many=True)
+                data = serializer.data
 
             total_pages = (total_count + page_size - 1) // page_size
             has_next = page < total_pages
@@ -1245,7 +1219,7 @@ class BankAuctionPropertyView(APIView):
             search_query = request.GET.get('search_query') or request.GET.get('search') or ''
             
             # Validate page_size
-            allowed_page_sizes = [20, 50, 100, 500, 1000, 5000]
+            allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
             if page_size not in allowed_page_sizes:
                 page_size = 20
             
