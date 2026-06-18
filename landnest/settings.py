@@ -138,7 +138,7 @@ WSGI_APPLICATION = 'landnest.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'landnest_db',
+        'NAME': 'landnest_test_db',
         'USER': 'root',
         'PASSWORD': 'Root@1234',
         'HOST': 'localhost',
