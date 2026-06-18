@@ -43,13 +43,14 @@ from meilisearch_helpers import (
     MEILI_WANTED_SEARCHABLE
 )
 
-def build_property_cache_key(search_query, property_type_filter, type_filter, page, page_size, chunk, chunk_number):
+def build_property_cache_key(search_query, property_type_filter, type_filter, category_name_filter, page, page_size, chunk, chunk_number):
     safe_search = re.sub(r'[^A-Za-z0-9_]+', '_', (search_query or '').strip().lower()) if search_query else 'all'
     safe_prop_type = re.sub(r'[^A-Za-z0-9_]+', '_', (property_type_filter or '').strip().lower()) if property_type_filter else 'all'
     safe_type = re.sub(r'[^A-Za-z0-9_]+', '_', (type_filter or '').strip().lower()) if type_filter else 'all'
-    return f"property_search_{safe_search}_{safe_prop_type}_{safe_type}_{page}_{page_size}_{chunk}_{chunk_number}"
+    safe_category = re.sub(r'[^A-Za-z0-9_]+', '_', (category_name_filter or '').strip().lower()) if category_name_filter else 'all'
+    return f"property_search_{safe_search}_{safe_prop_type}_{safe_type}_{safe_category}_{page}_{page_size}_{chunk}_{chunk_number}"
 
-def perform_meilisearch_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
+def perform_meilisearch_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
     index = get_meilisearch_property_index()
     if not index:
         return None, None
@@ -61,6 +62,8 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
     
     if property_type_filter:
         filter_clauses.append(f'property_type = "{property_type_filter}"')
+    if category_name_filter:
+        filter_clauses.append(f'category_name = "{category_name_filter}"')
     if type_filter:
         filter_clauses.append(f'type = "{type_filter}"')
     if posted_by:
@@ -85,14 +88,19 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
     try:
         search_result = index.search(search_query, options)
         hits = search_result.get('hits', [])
+        # Ensure results are ordered by property_id descending when present
+        try:
+            hits = sorted(hits, key=lambda x: int(x.get('property_id') or x.get('property_id', 0)), reverse=True)
+        except Exception:
+            pass
         total_count = search_result.get('estimatedTotalHits') or search_result.get('nbHits') or len(hits)
         return hits[:actual_page_size], total_count
     except Exception:
         return None, None
 
-def perform_db_search_properties(search_query, property_type_filter, type_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
+def perform_db_search_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
     # BASE FILTERS: Approved status is MANDATORY
-    queryset = Property.objects.all()
+    queryset = Property.objects.all().order_by('-property_id')
     
     if exclude_role:
         queryset = queryset.exclude(user_id__role=exclude_role)
@@ -106,6 +114,8 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
     
     if property_type_filter:
         queryset = queryset.filter(property_type__iexact=property_type_filter)
+    if category_name_filter:
+        queryset = queryset.filter(category_id__category__iexact=category_name_filter)
     if type_filter:
         queryset = queryset.filter(type__iexact=type_filter)
     if posted_by:
@@ -155,9 +165,9 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
         queryset = queryset.filter(search_q)
 
     # Get total count for pagination with caching
-    if search_query or price_min or price_max or exclude_role:
+    if search_query or price_min or price_max or exclude_role or category_name_filter or posted_by or exclude_posted_by:
         # Cache the count for search results as it takes 30s+ for 800k records
-        cache_key = f"search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{property_type_filter}_{type_filter}_{price_min}_{price_max}_{exclude_role}"
+        cache_key = f"search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{property_type_filter}_{type_filter}_{category_name_filter}_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}"
         total_count = cache_manager.get(cache_key)
         
         if total_count is None:
@@ -189,7 +199,13 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
             'user_mobile_no': obj.user_id.mobile_no if obj.user_id else '',
             'category_id': obj.category_id.category_id if obj.category_id else None,
             'category_name': obj.category_id.category if obj.category_id else '',
-            'property_images': [{'id': img.id, 'image': img.image.name} for img in obj.property_images.all()]
+            'property_images': [{'id': img.id, 'image': img.image.name} for img in obj.property_images.all()],
+            'user_email': obj.user_id.email if obj.user_id else '',
+            'type': obj.type,
+            'min_budget': obj.min_budget,
+            'max_budget': obj.max_budget,
+            'min_acres': obj.min_acres,
+            'max_acres': obj.max_acres
         })
     
     return data, total_count
@@ -225,13 +241,19 @@ def perform_meilisearch_property_requests(search_query, looking_for_filter, prop
     try:
         search_result = index.search(search_query, options)
         hits = search_result.get('hits', [])
+        # Ensure results are ordered by req_id descending when present
+        try:
+            hits = sorted(hits, key=lambda x: int(x.get('req_id') or x.get('req_id', 0)), reverse=True)
+        except Exception:
+            pass
         total_count = search_result.get('estimatedTotalHits') or search_result.get('nbHits') or len(hits)
         return hits[:actual_page_size], total_count
     except Exception:
         return None, None
 
 def perform_db_search_property_requests(search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size, user_id=None):
-    queryset = PropertyRequest.objects.all().select_related('user_id').prefetch_related('pro_loc').only(
+    # Order by newest requests first
+    queryset = PropertyRequest.objects.all().order_by('-req_id').select_related('user_id').prefetch_related('pro_loc').only(
         'req_id', 'user_id', 'looking_for', 'property_type', 'min_budget', 'max_budget',
         'no_of_bedrooms', 'area', 'units', 'created_at', 'updated_at',
         'user_id__first_name', 'user_id__last_name', 'user_id__mobile_no', 'user_id__email'
@@ -286,7 +308,20 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
 
     data = []
     for obj in objs:
-        loc = obj.pro_loc.first()
+        # collect all location strings
+        locs = [l.location for l in obj.pro_loc.all() if l.location]
+        # If a search_query is provided, prefer the locations that match the query
+        if search_query and locs:
+            matches = [l for l in locs if search_query.lower() in l.lower()]
+            if matches:
+                location_val = '\n'.join(matches)
+            else:
+                # no matching location strings; fall back to first location
+                location_val = locs[0]
+        else:
+            # default: join all locations into a comma separated string (preserves previous behavior for locations_str)
+            location_val = ', '.join(locs) if locs else '-'
+
         data.append({
             'req_id': obj.req_id,
             'user_id': obj.user_id_id,
@@ -299,7 +334,7 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
             'min_budget': obj.min_budget,
             'max_budget': obj.max_budget,
             'no_of_bedrooms': obj.no_of_bedrooms,
-            'location': loc.location if loc else '-',
+            'location': location_val,
             'area': obj.area,
             'units': obj.units,
             'created_at': obj.created_at,
@@ -333,6 +368,11 @@ def perform_meilisearch_bank_properties(search_query, property_type_filter, actu
     try:
         search_result = index.search(search_query, options)
         hits = search_result.get('hits', [])
+        # Ensure results are ordered by bankprop_id descending when present
+        try:
+            hits = sorted(hits, key=lambda x: int(x.get('bankprop_id') or x.get('bankprop_id', 0)), reverse=True)
+        except Exception:
+            pass
         # Simple ratio match check if needed
         total_count = search_result.get('estimatedTotalHits') or search_result.get('nbHits') or len(hits)
         return hits[:actual_page_size], total_count
@@ -340,7 +380,7 @@ def perform_meilisearch_bank_properties(search_query, property_type_filter, actu
         return None, None
 
 def perform_db_search_bank_properties(search_query, property_type_filter, actual_offset, actual_page_size):
-    queryset = BankAuctionProperty.objects.all()
+    queryset = BankAuctionProperty.objects.all().order_by('-bankprop_id')
     if property_type_filter:
         queryset = queryset.filter(property_type__icontains=property_type_filter)
     
@@ -374,7 +414,8 @@ def perform_db_search_bank_properties(search_query, property_type_filter, actual
     else:
         total_count = get_total_bank_auction_properties_count()
 
-    objs = queryset.select_related('user_id').prefetch_related('property_images')[actual_offset:actual_offset + actual_page_size]
+    # BankAuctionProperty has related documents via 'bank_pro_doc'
+    objs = queryset.select_related('user_id').prefetch_related('bank_pro_doc')[actual_offset:actual_offset + actual_page_size]
     
     data = []
     for obj in objs:
@@ -383,12 +424,16 @@ def perform_db_search_bank_properties(search_query, property_type_filter, actual
             'bank_name': obj.bank_name,
             'property_type': obj.property_type,
             'action_type': obj.action_type,
-            'price': obj.price,
+            'price': obj.reserve_price,
+            'reserve_price': obj.reserve_price,
+            'emd_amount': obj.emd_amount,
+            'possession_status': obj.possession_status,            
             'location': obj.location,
             'city_town': obj.city_town,
             'area_town': obj.area_town,
             'description': obj.description,
-            'property_images': [{'id': img.id, 'image': img.image.name} for img in obj.property_images.all()],
+            # Return related bank documents under 'bank_pro_doc' key
+            'bank_pro_doc': [{'doc_id': doc.doc_id, 'document': doc.document.name} for doc in obj.bank_pro_doc.all()],
             'user_first_name': obj.user_id.first_name if obj.user_id else '',
             'user_last_name': obj.user_id.last_name if obj.user_id else '',
             'user_mobile_no': obj.user_id.mobile_no if obj.user_id else '',
@@ -489,6 +534,7 @@ class PropertyAPIView(APIView):
             # Get filtering parameters
             property_type_filter = request.GET.get('property_type', '')
             type_filter = request.GET.get('type', '')
+            category_name_filter = request.GET.get('category_name', '')
             search_query = request.GET.get('search_query') or request.GET.get('search') or ''
             
             # Get price filters
@@ -499,7 +545,7 @@ class PropertyAPIView(APIView):
             print('exclude_role', exclude_role)
             print('posted_by', posted_by)
             # Determine cache key with price filters and posted_by
-            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}"
+            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}_{category_name_filter}"
             
             # Validate page_size
             allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
@@ -517,14 +563,15 @@ class PropertyAPIView(APIView):
 
             # Determine cache key
             if search_query:
-                cache_key = build_property_cache_key(search_query, property_type_filter, type_filter, page, page_size, chunk, chunk_number) + cache_key_suffix
+                cache_key = build_property_cache_key(search_query, property_type_filter, type_filter, category_name_filter, page, page_size, chunk, chunk_number) + cache_key_suffix
             else:
                 safe_prop_type = property_type_filter.replace(' ', '_').replace('/', '_') if property_type_filter else 'all'
                 safe_type = type_filter.replace(' ', '_').replace('/', '_') if type_filter else 'all'
+                safe_category = category_name_filter.replace(' ', '_').replace('/', '_') if category_name_filter else 'all'
                 if page_size > 100 and request.GET.get('chunk_number') is not None:
-                    cache_key = f"property_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_prop_type}_{safe_type}" + cache_key_suffix
+                    cache_key = f"property_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_prop_type}_{safe_type}_{safe_category}" + cache_key_suffix
                 else:
-                    cache_key = f"property_list_{page}_{page_size}_{safe_prop_type}_{safe_type}" + cache_key_suffix
+                    cache_key = f"property_list_{page}_{page_size}_{safe_prop_type}_{safe_type}_{safe_category}" + cache_key_suffix
 
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
@@ -536,17 +583,17 @@ class PropertyAPIView(APIView):
 
             if search_query:
                 data, total_count = perform_meilisearch_properties(
-                    search_query, property_type_filter, type_filter, actual_offset, actual_page_size,
+                    search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size,
                     price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
                 )
                 if data is None:
                     data, total_count = perform_db_search_properties(
-                        search_query, property_type_filter, type_filter, actual_offset, actual_page_size,
+                        search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size,
                         price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
                     )
             else:
-                # Apply base filters and compute counts
-                queryset = Property.objects.all()
+                # Apply base filters and compute counts (ordered by newest `property_id` first)
+                queryset = Property.objects.all().order_by('-property_id')
 
                 if exclude_role:
                     queryset = queryset.exclude(user_id__role=exclude_role)
@@ -560,6 +607,8 @@ class PropertyAPIView(APIView):
 
                 if property_type_filter:
                     queryset = queryset.filter(property_type__iexact=property_type_filter)
+                if category_name_filter:
+                    queryset = queryset.filter(category_id__category__iexact=category_name_filter)
                 if type_filter:
                     queryset = queryset.filter(type__iexact=type_filter)
 
@@ -867,18 +916,32 @@ class PropertyRequestTypeAPIView(APIView):
                         search_query, looking_for_filter, property_type_filter, actual_offset, actual_page_size
                     )
             else:
-                # Get total count (fast)
+                # Get total count (fast) with caching — avoid undefined helper calls
                 if looking_for_filter and property_type_filter:
-                    total_count = get_looking_for_property_type_count(looking_for_filter, property_type_filter)
+                    # cached key for combined filter
+                    cache_key_count = f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{looking_for_filter}_{property_type_filter}"
+                    total_count = cache_manager.get(cache_key_count)
+                    if total_count is None:
+                        total_count = PropertyRequest.objects.filter(looking_for__iexact=looking_for_filter, property_type__iexact=property_type_filter).count()
+                        cache_manager.set(cache_key_count, total_count, 3600)
+                    else:
+                        total_count = int(total_count)
                 elif looking_for_filter:
                     total_count = get_looking_for_count(looking_for_filter)
                 elif property_type_filter:
-                    total_count = get_property_type_count(property_type_filter)
+                    # cache property_type counts for wanted requests
+                    cache_key_pt = f"wanted_property_type_count_{re.sub(r'[^A-Za-z0-9]+', '_', property_type_filter.lower())}"
+                    total_count = cache_manager.get(cache_key_pt)
+                    if total_count is None:
+                        total_count = PropertyRequest.objects.filter(property_type__iexact=property_type_filter).count()
+                        cache_manager.set(cache_key_pt, total_count, 3600)
+                    else:
+                        total_count = int(total_count)
                 else:
                     total_count = get_total_property_requests_count()
                 
-                # Apply filters
-                queryset = PropertyRequest.objects.all().select_related('user_id').prefetch_related('pro_loc')
+                # Apply filters (ordered by newest `req_id` first)
+                queryset = PropertyRequest.objects.all().order_by('-req_id').select_related('user_id').prefetch_related('pro_loc')
                 if looking_for_filter:
                     queryset = queryset.filter(looking_for__iexact=looking_for_filter)
                 if property_type_filter:
@@ -990,8 +1053,8 @@ class PropertyRequestCRUD(APIView):
                 # Get total count (fast)
                 total_count = get_total_property_requests_count()
 
-                # Apply filters
-                queryset = PropertyRequest.objects.all().select_related('user_id').prefetch_related('pro_loc')
+                # Apply filters (ordered by newest `req_id` first)
+                queryset = PropertyRequest.objects.all().order_by('-req_id').select_related('user_id').prefetch_related('pro_loc')
                 if user_id:
                     queryset = queryset.filter(user_id=user_id)
                     total_count = queryset.count()
@@ -1282,7 +1345,7 @@ class BankAuctionPropertyView(APIView):
                 total_count = get_total_bank_auction_properties_count()
                 
                 # Apply type filter if provided
-                queryset = BankAuctionProperty.objects.all()
+                queryset = BankAuctionProperty.objects.all().order_by('-bankprop_id')
                 if property_type_filter:
                     queryset = queryset.filter(property_type__icontains=property_type_filter)
                     total_count = queryset.count() # Recalculate if filtered

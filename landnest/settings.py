@@ -132,13 +132,13 @@ WSGI_APPLICATION = 'landnest.wsgi.application'
 #        'NAME': BASE_DIR / 'db.sqlite3',
 #    }
 #}
-
+# landnest_db
 # landnest_test_db
 # landnest_test_08_06_26
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'landnest_test_db',
+        'NAME': 'landnest_db',
         'USER': 'root',
         'PASSWORD': 'Root@1234',
         'HOST': 'localhost',
