@@ -15,4 +15,4 @@ class UsersConfig(AppConfig):
         
         # Start background tasks if needed
         from . import tasks
-        # tasks.start_thread()
+        tasks.start_thread()
