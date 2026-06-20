@@ -11,7 +11,15 @@ from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 from datetime import datetime, timedelta
 from django.core.cache import cache
-from cache_config import cache_manager, get_total_users_count, get_user_type_count, update_total_users_count, update_user_type_count
+from cache_config import (
+    cache_manager,
+    get_total_users_count,
+    get_user_type_count,
+    update_total_users_count,
+    update_user_type_count,
+    bump_cache_version,
+    versioned_cache_key,
+)
 from uuid import uuid4
 import random
 import re
@@ -352,6 +360,8 @@ class UserListCreateAPIView(APIView):
                     cache_key = f"users_list_{page}_{page_size}_{chunk}_{chunk_number}_{safe_user_type}_v2"
                 else:
                     cache_key = f"users_list_{page}_{page_size}_{safe_user_type}_v2"
+
+            cache_key = versioned_cache_key(cache_key, "users")
             
             # Try to get from cache first using cache manager
             cached_data = cache_manager.get(cache_key)
@@ -404,7 +414,10 @@ class UserListCreateAPIView(APIView):
                 return Response(response_data, status=status.HTTP_200_OK)
             
             # Get total count for pagination info using global variable (fast)
-            total_count = get_total_users_count()
+            if user_type_filter:
+                total_count = get_user_type_count(user_type_filter)
+            else:
+                total_count = get_total_users_count()
             
             # Apply user_type filter if provided
             user_filter = {}
@@ -580,10 +593,11 @@ class UserListCreateAPIView(APIView):
                             }
                         )
                 
-                # Update global total users count and user_type count for new user
-                update_total_users_count(increment=1)
-                if user.role == '1':
+                # Update cached counts for list pagination
+                if user.role == 'User':
+                    update_total_users_count(increment=1)
                     update_user_type_count(user.user_type, increment=1)
+                bump_cache_version("users")
 
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -636,6 +650,8 @@ class UserGetUserTypeAPIView(APIView):
                 else:
                     print('no cache, page<100')
                     cache_key = f"users_type_{safe_user_type}_{page}_{page_size}"
+
+            cache_key = versioned_cache_key(cache_key, "users")
             
             # Try to get from cache first
             cached_data = cache_manager.get(cache_key)
@@ -804,9 +820,23 @@ class UserRetrieveUpdateDeleteAPIView(APIView):
             user = self.get_object(pk)
             if not user:
                 return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+            old_role = user.role
+            old_user_type = user.user_type
             serializer = UserSerializer(user, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
+                new_role = user.role
+                new_user_type = user.user_type
+                if old_role == 'User' and new_role != 'User':
+                    update_total_users_count(increment=-1)
+                    update_user_type_count(old_user_type, increment=-1)
+                elif old_role != 'User' and new_role == 'User':
+                    update_total_users_count(increment=1)
+                    update_user_type_count(new_user_type, increment=1)
+                elif old_role == 'User' and new_role == 'User' and old_user_type != new_user_type:
+                    update_user_type_count(old_user_type, increment=-1)
+                    update_user_type_count(new_user_type, increment=1)
+                bump_cache_version("users")
                 return Response(serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -819,11 +849,12 @@ class UserRetrieveUpdateDeleteAPIView(APIView):
                 return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
             
             # Update global total users count and user_type count for deleted user with role='1'
-            if user.role == '1':
+            if user.role == 'User':
                 update_total_users_count(increment=-1)
                 update_user_type_count(user.user_type, increment=-1)
 
             user.delete()
+            bump_cache_version("users")
             return Response({'message': 'user deleted successfully'})            
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -8,6 +8,62 @@ from django.utils import timezone
 from .serializers import *
 from property.models import Property 
 from django.db.models import Q
+from django.db import IntegrityError
+
+def _create_property_notifications(property_id):
+    try:
+        prop = Property.objects.select_related('user_id').get(pk=property_id)
+    except Exception:
+        return 0
+
+    sender = prop.user_id
+    sender_id = getattr(sender, 'user_id', None)
+    if sender_id is None:
+        return 0
+
+    qs = User.objects.exclude(user_id=sender_id).only('user_id')
+    buffer = []
+    created = 0
+
+    for user in qs.iterator(chunk_size=2000):
+        buffer.append(
+            notifications(
+                message_sender=sender,
+                message_receiver=user,
+                property_id=prop,
+                property_type=prop.type,
+                notification_type="general",
+                message=f"New property added by {sender.username}",
+                action_from_table="Property",
+                action_tbl_id=str(prop.pk),
+            )
+        )
+
+        if len(buffer) >= 1000:
+            try:
+                notifications.objects.bulk_create(buffer, batch_size=1000, ignore_conflicts=False)
+                created += len(buffer)
+            except IntegrityError:
+                pass
+            except Exception:
+                pass
+            buffer = []
+
+    if buffer:
+        try:
+            notifications.objects.bulk_create(buffer, batch_size=1000, ignore_conflicts=False)
+            created += len(buffer)
+        except IntegrityError:
+            pass
+        except Exception:
+            pass
+
+    return created
+
+
+@shared_task
+def create_property_notifications(property_id):
+    return _create_property_notifications(property_id)
 
 @shared_task
 def check_expired_subscriptions():

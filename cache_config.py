@@ -62,6 +62,8 @@ class CacheManager:
         """Set value in cache with Redis fallback to Django cache"""
         if self.redis_available:
             try:
+                if timeout is None:
+                    return self.redis_client.set(key, value)
                 return self.redis_client.setex(key, timeout, value)
             except Exception as e:
                 logger.warning(f"Redis set failed, falling back to Django cache: {e}")
@@ -111,7 +113,10 @@ class CacheManager:
             try:
                 pipe = self.redis_client.pipeline()
                 for key, value in mapping.items():
-                    pipe.setex(key, timeout, value)
+                    if timeout is None:
+                        pipe.set(key, value)
+                    else:
+                        pipe.setex(key, timeout, value)
                 return pipe.execute()
             except Exception as e:
                 logger.warning(f"Redis mset failed, falling back to Django cache: {e}")
@@ -258,6 +263,48 @@ def cache_result(timeout=None, key_generator=None):
         return wrapper
     return decorator
 
+
+def get_cache_version(namespace: str) -> str:
+    key = f"cache_version:{namespace}"
+    value = cache_manager.get(key)
+    if value is None or value == "":
+        version_int = 1
+        try:
+            cache_manager.set(key, version_int, timeout=None)
+        except Exception:
+            pass
+        return str(version_int)
+
+    try:
+        return str(int(value))
+    except Exception:
+        try:
+            cache_manager.set(key, 1, timeout=None)
+        except Exception:
+            pass
+        return "1"
+
+
+def bump_cache_version(namespace: str) -> str:
+    key = f"cache_version:{namespace}"
+    current = cache_manager.get(key)
+    try:
+        current_int = int(current) if current is not None and current != "" else 1
+    except Exception:
+        current_int = 1
+
+    next_int = current_int + 1
+    try:
+        cache_manager.set(key, next_int, timeout=None)
+    except Exception:
+        pass
+    return str(next_int)
+
+
+def versioned_cache_key(base_key: str, namespace: str) -> str:
+    version = get_cache_version(namespace)
+    return f"{base_key}:v{version}"
+
 # Helper functions for user caching
 def initialize_total_users_count():
     print('Initializing total users count')
@@ -317,13 +364,16 @@ def get_user_type_count(user_type):
 def update_total_users_count(increment=0):
     """Update global total users count (called on POST/DELETE)"""
     global total_users_count, user_type_counts
-    if increment > 0:
-        total_users_count = (total_users_count or 0) + increment
+    if total_users_count is None:
+        initialize_total_users_count()
+
+    if increment != 0:
+        total_users_count = max(0, (total_users_count or 0) + int(increment))
     else:
         # Recalculate from database
         try:
             from users.models import User
-            total_users_count = User.objects.filter(role='1').count()
+            total_users_count = User.objects.filter(role='User').count()
             initialize_user_type_counts()  # Recalculate user_type counts too
         except Exception:
             pass  # Keep existing count if query fails
@@ -332,20 +382,24 @@ def update_total_users_count(increment=0):
 def update_user_type_count(user_type, increment=0):
     """Update global user_type count (called on POST/DELETE)"""
     global user_type_counts
-    if increment > 0:
-        user_type_counts[user_type] = (user_type_counts.get(user_type, 0) + increment)
+    key = user_type if user_type else 'Old Users'
+    if user_type_counts.get(key) is None:
+        initialize_user_type_counts()
+
+    if increment != 0:
+        user_type_counts[key] = max(0, (user_type_counts.get(key, 0) + int(increment)))
     else:
         # Recalculate from database
         try:
             from users.models import User
-            users = User.objects.filter(role='1')
-            if user_type == 'Old Users':
-                user_type_counts[user_type] = users.filter(user_type=None).count()
+            users = User.objects.filter(role='User')
+            if key == 'Old Users':
+                user_type_counts[key] = users.filter(user_type=None).count()
             else:
-                user_type_counts[user_type] = users.filter(user_type=user_type).count()
+                user_type_counts[key] = users.filter(user_type=key).count()
         except Exception:
             pass  # Keep existing count if query fails
-    logger.info(f"Updated user_type_count for {user_type}: {user_type_counts.get(user_type, 0)}")
+    logger.info(f"Updated user_type_count for {key}: {user_type_counts.get(key, 0)}")
 
 # Legacy function for backward compatibility
 def get_cached_total_users_count():
@@ -497,7 +551,10 @@ def get_total_properties_count_fast():
 
 def get_property_type_count_fast(property_type):
     """Get count for specific property_type with caching"""
-    cache_key = f"total_count_property_type_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}"
+    cache_key = versioned_cache_key(
+        f"total_count_property_type_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}",
+        "properties",
+    )
     cached_count = cache_manager.get(cache_key)
     if cached_count is not None:
         return int(cached_count)
@@ -512,7 +569,7 @@ def get_property_type_count_fast(property_type):
 
 def get_type_count_fast(type_val):
     """Get count for specific type (rent/sell/lease) with caching"""
-    cache_key = f"total_count_type_{type_val.lower()}"
+    cache_key = versioned_cache_key(f"total_count_type_{type_val.lower()}", "properties")
     cached_count = cache_manager.get(cache_key)
     if cached_count is not None:
         return int(cached_count)
@@ -527,7 +584,10 @@ def get_type_count_fast(type_val):
 
 def get_property_filter_count_fast(property_type, type_val):
     """Get count for combined filters with caching"""
-    cache_key = f"total_count_combined_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}_{type_val.lower()}"
+    cache_key = versioned_cache_key(
+        f"total_count_combined_{re.sub(r'[^A-Za-z0-9]+', '_', property_type.lower())}_{type_val.lower()}",
+        "properties",
+    )
     cached_count = cache_manager.get(cache_key)
     if cached_count is not None:
         return int(cached_count)

@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta
 from django.utils import timezone
 import json
+import threading
 
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -29,7 +30,9 @@ from cache_config import (
     update_total_properties_count,
     get_property_type_count_fast,
     get_type_count_fast,
-    get_property_filter_count_fast
+    get_property_filter_count_fast,
+    bump_cache_version,
+    versioned_cache_key,
 )
 from meilisearch_helpers import (
     get_meilisearch_bank_index, 
@@ -167,7 +170,10 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
     # Get total count for pagination with caching
     if search_query or price_min or price_max or exclude_role or category_name_filter or posted_by or exclude_posted_by:
         # Cache the count for search results as it takes 30s+ for 800k records
-        cache_key = f"search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{property_type_filter}_{type_filter}_{category_name_filter}_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}"
+        cache_key = versioned_cache_key(
+            f"search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{property_type_filter}_{type_filter}_{category_name_filter}_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}",
+            "properties",
+        )
         total_count = cache_manager.get(cache_key)
         
         if total_count is None:
@@ -293,7 +299,10 @@ def perform_db_search_property_requests(search_query, looking_for_filter, proper
 
     # Cache the count for search results as it's slow for large datasets
     if search_query or user_id:
-        cache_key = f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{looking_for_filter}_{property_type_filter}_{user_id}"
+        cache_key = versioned_cache_key(
+            f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{looking_for_filter}_{property_type_filter}_{user_id}",
+            "property_requests",
+        )
         total_count = cache_manager.get(cache_key)
 
         if total_count is None:
@@ -404,7 +413,10 @@ def perform_db_search_bank_properties(search_query, property_type_filter, actual
 
     # Cache the count for search results
     if search_query:
-        cache_key = f"bank_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{property_type_filter}"
+        cache_key = versioned_cache_key(
+            f"bank_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', search_query.lower())}_{property_type_filter}",
+            "bank_auction_properties",
+        )
         total_count = cache_manager.get(cache_key)
         if total_count is None:
             total_count = queryset.count()
@@ -573,6 +585,8 @@ class PropertyAPIView(APIView):
                 else:
                     cache_key = f"property_list_{page}_{page_size}_{safe_prop_type}_{safe_type}_{safe_category}" + cache_key_suffix
 
+            cache_key = versioned_cache_key(cache_key, "properties")
+
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
             if cached_data:
@@ -676,20 +690,15 @@ class PropertyAPIView(APIView):
             
             # Update global count
             update_total_properties_count(1)
-
-            all_users = User.objects.all().exclude(user_id=property_obj.user_id_id)
-
-            for i in all_users:
-                notifications.objects.create(
-                    message_sender=property_obj.user_id,
-                    message_receiver=i,
-                    property_id=property_obj,
-                    property_type=property_obj.type,
-                    notification_type="general",
-                    message=f"New property added by {property_obj.user_id.username}",
-                    action_from_table="Property", 
-                    action_tbl_id=str(property_obj.pk)
-                )
+            bump_cache_version("properties")
+            try:
+                from users.tasks import create_property_notifications, _create_property_notifications
+                try:
+                    create_property_notifications.delay(property_obj.pk)
+                except Exception:
+                    threading.Thread(target=_create_property_notifications, args=(property_obj.pk,), daemon=True).start()
+            except Exception:
+                pass
 
             return Response({'message': 'Property created successfully', 'data': serializer.data}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -734,6 +743,7 @@ class PropertyAPIView(APIView):
 
         if serializer.is_valid():
             serializer.save()
+            bump_cache_version("properties")
 
             # Handle new images
             new_images = request.FILES.getlist('new_property_images')
@@ -756,6 +766,7 @@ class PropertyAPIView(APIView):
             
             # Update global count
             update_total_properties_count(-1)
+            bump_cache_version("properties")
             
             return Response({'message': 'Property deleted successfully'})
         except Property.DoesNotExist:
@@ -820,6 +831,8 @@ class BulkPropertyUpdateAPIView(APIView):
         response_data = {'updated': updated_properties}
         if errors:
             response_data['errors'] = errors
+        if updated_properties:
+            bump_cache_version("properties")
 
         return Response(response_data, status=status.HTTP_200_OK if not errors else status.HTTP_207_MULTI_STATUS)
 
@@ -845,6 +858,7 @@ class BoostPropertyAPIView(APIView):
 
             today = timezone.now() + timedelta(hours=5, minutes=30)                            
             properties.update(boost_date=today)
+            bump_cache_version("properties")
 
             serializer = PropertySerializer(properties, many=True)
 
@@ -898,6 +912,7 @@ class PropertyRequestTypeAPIView(APIView):
 
             # Determine cache key
             cache_key = build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number)
+            cache_key = versioned_cache_key(cache_key, "property_requests")
             
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
@@ -919,7 +934,10 @@ class PropertyRequestTypeAPIView(APIView):
                 # Get total count (fast) with caching — avoid undefined helper calls
                 if looking_for_filter and property_type_filter:
                     # cached key for combined filter
-                    cache_key_count = f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{looking_for_filter}_{property_type_filter}"
+                    cache_key_count = versioned_cache_key(
+                        f"wanted_search_count_{re.sub(r'[^A-Za-z0-9]+', '_', (search_query or '').lower())}_{looking_for_filter}_{property_type_filter}",
+                        "property_requests",
+                    )
                     total_count = cache_manager.get(cache_key_count)
                     if total_count is None:
                         total_count = PropertyRequest.objects.filter(looking_for__iexact=looking_for_filter, property_type__iexact=property_type_filter).count()
@@ -930,7 +948,10 @@ class PropertyRequestTypeAPIView(APIView):
                     total_count = get_looking_for_count(looking_for_filter)
                 elif property_type_filter:
                     # cache property_type counts for wanted requests
-                    cache_key_pt = f"wanted_property_type_count_{re.sub(r'[^A-Za-z0-9]+', '_', property_type_filter.lower())}"
+                    cache_key_pt = versioned_cache_key(
+                        f"wanted_property_type_count_{re.sub(r'[^A-Za-z0-9]+', '_', property_type_filter.lower())}",
+                        "property_requests",
+                    )
                     total_count = cache_manager.get(cache_key_pt)
                     if total_count is None:
                         total_count = PropertyRequest.objects.filter(property_type__iexact=property_type_filter).count()
@@ -1032,6 +1053,7 @@ class PropertyRequestCRUD(APIView):
 
             # Determine cache key
             cache_key = build_wanted_property_cache_key(search_query, looking_for_filter, property_type_filter, page, page_size, chunk, chunk_number, user_id)
+            cache_key = versioned_cache_key(cache_key, "property_requests")
 
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
@@ -1118,6 +1140,7 @@ class PropertyRequestCRUD(APIView):
                 update_total_property_requests_count(1)
                 if req_rec.looking_for:
                     update_looking_for_count(req_rec.looking_for, 1)
+                bump_cache_version("property_requests")
 
                 all_users = User.objects.all().exclude(user_id=req_rec.user_id_id)
 
@@ -1166,6 +1189,7 @@ class PropertyRequestCRUD(APIView):
 
             if serializer.is_valid():
                 serializer.save()
+                bump_cache_version("property_requests")
                 return Response(serializer.data, status=status.HTTP_200_OK)
 
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -1191,6 +1215,7 @@ class PropertyRequestCRUD(APIView):
             update_total_property_requests_count(-1)
             if looking_for_type:
                 update_looking_for_count(looking_for_type, -1)
+            bump_cache_version("property_requests")
             
             return Response({"message": "Deleted successfully"}, status=status.HTTP_200_OK)
 
@@ -1324,6 +1349,8 @@ class BankAuctionPropertyView(APIView):
                 else:
                     cache_key = f"bank_list_{page}_{page_size}_{safe_type}"
 
+            cache_key = versioned_cache_key(cache_key, "bank_auction_properties")
+
             # Try to get from cache
             cached_data = cache_manager.get(cache_key)
             if cached_data:
@@ -1394,6 +1421,7 @@ class BankAuctionPropertyView(APIView):
                 serializer.save()
                 # Update global count
                 update_total_bank_auction_properties_count(1)
+                bump_cache_version("bank_auction_properties")
                 return Response(
                     {'message': 'Auction property created successfully', 'data': serializer.data},
                     status=status.HTTP_201_CREATED
@@ -1429,6 +1457,7 @@ class BankAuctionPropertyView(APIView):
 
             if serializer.is_valid():
                 serializer.save()
+                bump_cache_version("bank_auction_properties")
                 return Response(
                     {'message': 'Auction property updated successfully', 'data': serializer.data},
                     status=status.HTTP_200_OK
@@ -1446,6 +1475,7 @@ class BankAuctionPropertyView(APIView):
             obj.delete()
             # Update global count
             update_total_bank_auction_properties_count(-1)
+            bump_cache_version("bank_auction_properties")
             return Response({'message': 'Auction property deleted successfully'}, status=status.HTTP_200_OK)
 
         except BankAuctionProperty.DoesNotExist:
@@ -2010,6 +2040,7 @@ class FilteredListPropertyAPIView(APIView):
             include_str = '_'.join([f"{k}_{v}" for k, v in sorted(safe_include.items())])
             exclude_str = '_'.join([f"{k}_{v}" for k, v in sorted(safe_exclude.items())])
             cache_key = f"properties_list_{offset}_{limit}_{include_str}_{exclude_str}"
+            cache_key = versioned_cache_key(cache_key, "properties")
             
             # Try to get from cache first using cache manager
             cached_data = cache_manager.get(cache_key)
