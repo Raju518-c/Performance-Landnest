@@ -232,6 +232,7 @@ class ResponsePropertyRequest(models.Model):
 class BankAuctionProperty(models.Model):
 
     Status = [
+        ('Pending', 'Pending'),
         ('Approved', 'Approved'),
         ('Rejected', 'Rejected'),
     ]
@@ -265,7 +266,7 @@ class BankAuctionProperty(models.Model):
     bank_contact_details = models.CharField(max_length=200, blank=True, null=True)    
 
     description = models.TextField(blank=True, null=True)
-    status = models.CharField(choices=Status, max_length=100, default=None, null=True, blank=True)
+    status = models.CharField(choices=Status, max_length=100, default='Pending', null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)   # auto refresh on update
