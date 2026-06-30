@@ -139,7 +139,7 @@ def perform_db_search_users(search_query, user_type_filter, actual_offset, actua
     print('search_q', search_q)
     queryset = User.objects.filter(**user_filter).filter(search_q).prefetch_related(
         'user_features', 'user_properties', 'user_prop_req', 'user_best_deals'
-    )
+    ).order_by('-user_id')
 
     total_count = queryset.count()
     users = queryset[actual_offset:actual_offset + actual_page_size]
@@ -174,7 +174,7 @@ class ValidateSessionAPIView(APIView):
 class RoleListCreateAPIView(APIView):
     def get(self, request):
         try:
-            roles = Role.objects.all()
+            roles = Role.objects.all().order_by('-role_id')
             serializer = RoleSerializer(roles, many=True)
             return Response(serializer.data)
         except Exception as e:
@@ -427,7 +427,7 @@ class UserListCreateAPIView(APIView):
             # Get paginated users with filters and optimized query
             users = User.objects.filter(**user_filter).prefetch_related(
                 'user_features', 'user_properties', 'user_prop_req', 'user_best_deals'
-            )[actual_offset:actual_offset + actual_page_size]
+            ).order_by('-user_id')[actual_offset:actual_offset + actual_page_size]
             serializer = UserSerializer(users, many=True)
             
             # Calculate pagination info
@@ -717,7 +717,7 @@ class UserGetUserTypeAPIView(APIView):
             users = User.objects.filter(**user_filter).only(
                 'user_id', 'username', 'email', 'mobile_no', 'state', 'city', 
                 'role', 'user_type', 'created_at', 'updated_at'
-            )[actual_offset:actual_offset + actual_page_size]
+            ).order_by('-user_id')[actual_offset:actual_offset + actual_page_size]
             serializer = UserSerializer(users, many=True)
             
             # Calculate pagination info
@@ -775,7 +775,7 @@ class UserGetUserTypeAPIView(APIView):
             users = User.objects.filter(**user_filter).only(
                 'user_id', 'username', 'email', 'mobile_no', 'state', 'city', 
                 'role', 'user_type', 'created_at', 'updated_at'
-            )
+            ).order_by('-user_id')
             serializer = UserSerializer(users, many=True)
             
             return Response({
@@ -1045,7 +1045,7 @@ class VendorAPIView(APIView):
                 serializer = VendorSerializer(vendor)
                 return Response(serializer.data)
             else:
-                vendors = Vendors.objects.all()
+                vendors = Vendors.objects.all().order_by('-vendor_id')
                 serializer = VendorSerializer(vendors, many=True)
                 return Response(serializer.data)
         except Exception as e:
@@ -1141,7 +1141,7 @@ class UserCartView(APIView):
                 serializer = user_cartSerializer(cart)
                 return Response(serializer.data)
             else:
-                carts = user_cart.objects.all()
+                carts = user_cart.objects.all().order_by('-cart_id')
                 serializer = user_cartSerializer(carts, many=True)
                 return Response(serializer.data)
         except user_cart.DoesNotExist:
@@ -1192,7 +1192,7 @@ class BestDealsView(APIView):
                 serializer = best_dealsSerializer(deal)
                 return Response(serializer.data)
             else:
-                deals = best_deals.objects.all()
+                deals = best_deals.objects.all().order_by('-deal_id')
                 serializer = best_dealsSerializer(deals, many=True)
                 return Response(serializer.data)
         except best_deals.DoesNotExist:
@@ -1266,7 +1266,7 @@ def perform_meilisearch_consultant_req(search_query, interest_filter, actual_off
 
 
 def perform_db_search_consultant_req(search_query, interest_filter, actual_offset, actual_page_size):
-    queryset = consultant_req.objects.all()
+    queryset = consultant_req.objects.all().order_by('-request_id')
     
     if interest_filter:
         queryset = queryset.filter(interested_on__iexact=interest_filter)
@@ -1468,7 +1468,7 @@ class ChatMessageView(APIView):
                 serializer = ChatMessageSerializer(message)
                 return Response(serializer.data)
             else:
-                messages = ChatMessage.objects.all()
+                messages = ChatMessage.objects.all().order_by('-chatid')
                 serializer = ChatMessageSerializer(messages, many=True)
                 return Response(serializer.data)
         except ChatMessage.DoesNotExist:
@@ -1538,7 +1538,7 @@ class Enquiry_FormView(APIView):
                 serializer = Enquiry_FormSerializer(message)
                 return Response(serializer.data)
             else:
-                messages = Enquiry_Form.objects.all()
+                messages = Enquiry_Form.objects.all().order_by('-enqid')
                 serializer = Enquiry_FormSerializer(messages, many=True)
                 return Response(serializer.data)
         except Enquiry_Form.DoesNotExist:
@@ -1590,7 +1590,7 @@ class Activity_TblView(APIView):
                 act = activity_tbl.objects.get(pk=pk)
                 serializer = activity_tblSerializer(act)
             else:
-                act = activity_tbl.objects.all()
+                act = activity_tbl.objects.all().order_by('-log_id')
                 serializer = activity_tblSerializer(act, many=True)
             return Response(serializer.data)
         except activity_tbl.DoesNotExist:
@@ -2006,7 +2006,7 @@ class Sub_UserView(APIView):
                 sub = sub_user.objects.get(pk=pk)
                 serializer = sub_userSerializer(sub)
             else:
-                sub = sub_user.objects.all()
+                sub = sub_user.objects.all().order_by('-sub_id')
                 serializer = sub_userSerializer(sub, many=True)
             return Response(serializer.data)
         except sub_user.DoesNotExist:
@@ -2205,7 +2205,7 @@ class DeactivateSubUser(APIView):
 class GetUserSubPlan(APIView):
     def get(self, request, user_id):
         try:
-            user_plan = sub_user.objects.filter(user_id=user_id, status=True)
+            user_plan = sub_user.objects.filter(user_id=user_id, status=True).order_by('-sub_id')
             serializer = sub_userSerializer(user_plan, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
@@ -2225,7 +2225,7 @@ class GetUserAddon(APIView):
 class GetUserPlan(APIView):
     def get(self, request, user_id):
         try:                                    
-            plan_feature = UserFeatures.objects.filter(user_id=user_id)
+            plan_feature = UserFeatures.objects.filter(user_id=user_id).order_by('-feature_id')
             serializer = UserFeaturesSerializer(plan_feature, many=True)            
             return Response(serializer.data, status=status.HTTP_200_OK)        
         except Exception as e:
@@ -2800,7 +2800,7 @@ class iosUsersView(APIView):
                 serializer = iosUsersSerializer(obj)
                 return Response(serializer.data)
             else:
-                objs = iosUsers.objects.all()
+                objs = iosUsers.objects.all().order_by('-user_id')
                 serializer = iosUsersSerializer(objs, many=True)
                 return Response(serializer.data)
         except iosUsers.DoesNotExist:
