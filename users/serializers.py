@@ -207,6 +207,55 @@ class UserSerializer(serializers.ModelSerializer):
         return sorted(list(prop_types))
 
 
+class UsergetidSerializer(serializers.ModelSerializer): 
+    distinct_user_types = serializers.SerializerMethodField()
+    distinct_property_types = serializers.SerializerMethodField()
+    
+    log_history = loghistorySerializer(many=True, read_only=True)
+    user_properties = PropertySerializer1(many=True, read_only=True)
+
+    class Meta:
+        model = User
+        fields = '__all__'   
+
+    def get_distinct_user_types(self, obj):
+        user_types = set()
+        
+        # 1. From User model itself
+        # if obj.user_type:
+        #     user_types.add(obj.user_type)
+            
+        # 2. From UserFeatures model
+        if hasattr(obj, 'user_features'):
+            ufs = obj.user_features.values_list('user_type', flat=True).distinct()
+            user_types.update([ut for ut in ufs if ut])
+            
+        return sorted(list(user_types))
+
+    def get_distinct_property_types(self, obj):
+        # Collect property types from multiple potential sources
+        prop_types = set()
+        
+        # 1. From Property model
+        if hasattr(obj, 'user_properties'):
+            pts = obj.user_properties.values_list('property_type', flat=True).distinct()
+            ts = obj.user_properties.values_list('type', flat=True).distinct()
+            prop_types.update([t for t in pts if t])
+            prop_types.update([t for t in ts if t])
+            
+        # 2. From PropertyRequest (Wanted properties)
+        # if hasattr(obj, 'user_prop_req'):
+        #     pts = obj.user_prop_req.values_list('property_type', flat=True).distinct()
+        #     prop_types.update([t for t in pts if t])
+            
+        # # 3. From best_deals
+        # if hasattr(obj, 'user_best_deals'):
+        #     pts = obj.user_best_deals.values_list('property_type', flat=True).distinct()
+        #     prop_types.update([t for t in pts if t])
+            
+        return sorted(list(prop_types))
+
+
 
 class PasswordChangeSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, required=True)

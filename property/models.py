@@ -266,7 +266,8 @@ class BankAuctionProperty(models.Model):
     bank_contact_details = models.CharField(max_length=200, blank=True, null=True)    
 
     description = models.TextField(blank=True, null=True)
-    status = models.CharField(choices=Status, max_length=100, default='Pending', null=True, blank=True)
+    admin_status = models.CharField(choices=Status, max_length=100, default='Pending', null=True, blank=True)
+    status= models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)   # auto refresh on update

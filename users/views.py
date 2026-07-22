@@ -807,7 +807,7 @@ class UserRetrieveUpdateDeleteAPIView(APIView):
             user = self.get_object(pk)
             if not user:
                 return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-            serializer = UserSerializer(user)
+            serializer = UsergetidSerializer(user)
             return Response(serializer.data)  
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

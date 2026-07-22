@@ -53,7 +53,7 @@ def build_property_cache_key(search_query, property_type_filter, type_filter, ca
     safe_category = re.sub(r'[^A-Za-z0-9_]+', '_', (category_name_filter or '').strip().lower()) if category_name_filter else 'all'
     return f"property_search_{safe_search}_{safe_prop_type}_{safe_type}_{safe_category}_{page}_{page_size}_{chunk}_{chunk_number}"
 
-def perform_meilisearch_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
+def perform_meilisearch_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None, admin_status=None):
     index = get_meilisearch_property_index()
     if not index:
         return None, None
@@ -73,6 +73,8 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
         filter_clauses.append(f'posted_by = "{posted_by}"')
     if exclude_posted_by:
         filter_clauses.append(f'posted_by != "{exclude_posted_by}"')
+    if admin_status and admin_status != 'All':
+        filter_clauses.append(f'Admin_status = "{admin_status}"')
     
     # Add price range filters
     if price_min is not None:
@@ -101,7 +103,7 @@ def perform_meilisearch_properties(search_query, property_type_filter, type_filt
     except Exception:
         return None, None
 
-def perform_db_search_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None):
+def perform_db_search_properties(search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size, price_min=None, price_max=None, exclude_role=None, posted_by=None, exclude_posted_by=None, admin_status=None):
     # BASE FILTERS: Approved status is MANDATORY
     queryset = Property.objects.all().order_by('-property_id')
     
@@ -125,6 +127,8 @@ def perform_db_search_properties(search_query, property_type_filter, type_filter
         queryset = queryset.filter(posted_by__iexact=posted_by)
     if exclude_posted_by:
         queryset = queryset.exclude(posted_by__iexact=exclude_posted_by)
+    if admin_status and admin_status != 'All':
+        queryset = queryset.filter(Admin_status__iexact=admin_status)
     
     # Add price range filters to DB search
     if price_min is not None:
@@ -549,15 +553,18 @@ class PropertyAPIView(APIView):
             category_name_filter = request.GET.get('category_name', '')
             search_query = request.GET.get('search_query') or request.GET.get('search') or ''
             
+            print('category_name_filter', category_name_filter)
             # Get price filters
             price_min = request.GET.get('price_min')
             price_max = request.GET.get('price_max')
             exclude_role = request.GET.get('exclude_role')
+            admin_status = request.GET.get('Admin_status') or 'All'
             
             print('exclude_role', exclude_role)
             print('posted_by', posted_by)
+            print('admin_status', admin_status)
             # Determine cache key with price filters and posted_by
-            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}_{category_name_filter}"
+            cache_key_suffix = f"_{price_min}_{price_max}_{exclude_role}_{posted_by}_{exclude_posted_by}_{category_name_filter}_{admin_status}"
             
             # Validate page_size
             allowed_page_sizes = [10, 20, 30, 40, 50, 100, 500, 1000, 5000]
@@ -598,12 +605,12 @@ class PropertyAPIView(APIView):
             if search_query:
                 data, total_count = perform_meilisearch_properties(
                     search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size,
-                    price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
+                    price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by, admin_status=admin_status
                 )
                 if data is None:
                     data, total_count = perform_db_search_properties(
                         search_query, property_type_filter, type_filter, category_name_filter, actual_offset, actual_page_size,
-                        price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by
+                        price_min=price_min, price_max=price_max, exclude_role=exclude_role, posted_by=posted_by, exclude_posted_by=exclude_posted_by, admin_status=admin_status
                     )
             else:
                 # Apply base filters and compute counts (ordered by newest `property_id` first)
@@ -632,6 +639,10 @@ class PropertyAPIView(APIView):
                 if exclude_posted_by:
                     queryset = queryset.exclude(posted_by__iexact=exclude_posted_by)
 
+                # Add Admin_status filter if provided
+                if admin_status and admin_status != 'All':
+                    queryset = queryset.filter(Admin_status__iexact=admin_status)
+
                 # Add price filters to base query if provided without search
                 if price_min is not None:
                     queryset = queryset.filter(price__gte=price_min)
@@ -639,7 +650,7 @@ class PropertyAPIView(APIView):
                     queryset = queryset.filter(price__lte=price_max)
 
                 # Compute total_count: if any limiting filter is present, recalc
-                if price_min or price_max or posted_by or exclude_role or property_type_filter or type_filter:
+                if price_min or price_max or posted_by or exclude_role or property_type_filter or type_filter or (admin_status and admin_status != 'All'):
                     total_count = queryset.count()
                 else:
                     total_count = get_total_properties_count_fast()
