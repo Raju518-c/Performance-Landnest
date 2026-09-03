@@ -767,9 +767,6 @@ class PropertyAPIView(APIView):
             return Response(serializer.errors, status=400)
 
 
-
-
-
     def delete(self, request, pk):
         try:
             property_obj = Property.objects.get(pk=pk)
@@ -812,7 +809,10 @@ class GetPropertyType(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class BulkPropertyUpdateAPIView(APIView):
 
-    @extend_schema(request=PropertySerializer)    
+    @extend_schema(
+        request=PropertySerializer(many=True),
+        responses=PropertySerializer(many=True)
+    )  
     def put(self, request):
         data = request.data
 
@@ -1658,6 +1658,11 @@ class FilteredPropertyAPIView(APIView):
     Get properties with dynamic filters from payload
     Supports viewport bounds for map optimization
     """
+    @extend_schema(
+        request=FilteredPropertyRequestSerializer,
+        responses={200: FilteredPropertyResponseSerializer},
+        description="Get properties using include/exclude filters and optional map viewport bounds."
+    )
     def post(self, request):
         try:
             include = request.data.get('include', {})
@@ -2203,4 +2208,3197 @@ class SellPropertiesByNonAdminAPIView(APIView):
             }, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyAPIView_old(APIView):
+
+    def get(self, request, pk=None):
+
+        try:
+
+            if pk:
+
+                property_obj = (
+                    AdProperty.objects
+                    .select_related(
+                        "user_id",
+                        "category_id"
+                    )
+                    .prefetch_related(
+                        "AdProperty_images"
+                    )
+                    .get(pk=pk)
+                )
+
+                serializer = AdPropertySerializer(
+                    property_obj
+                )
+
+                return Response(
+                    serializer.data,
+                    status=status.HTTP_200_OK
+                )
+
+            queryset = (
+                AdProperty.objects
+                .select_related(
+                    "user_id",
+                    "category_id"
+                )
+                .prefetch_related(
+                    "AdProperty_images"
+                )
+                .order_by("-property_id")
+            )
+
+            serializer = AdPropertySerializer(
+                queryset,
+                many=True
+            )
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK
+            )
+
+        except AdProperty.DoesNotExist:
+            return Response(
+                {"error": "Property not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @extend_schema(request=AdPropertySerializer)
+    def post(self, request):
+
+        try:
+
+            payload = request.data.get("properties")
+
+            # -------------------------
+            # SINGLE RECORD
+            # -------------------------
+            if not payload:
+
+                data = request.data.copy()
+                data["status"] = True
+
+                serializer = AdPropertySerializer(data=data)
+
+                if serializer.is_valid():
+
+                    property_obj = serializer.save()
+
+                    response_serializer = AdPropertySerializer(
+                        property_obj
+                    )
+
+                    return Response(
+                        {
+                            "message": "Property created successfully",
+                            "data": response_serializer.data
+                        },
+                        status=status.HTTP_201_CREATED
+                    )
+
+                return Response(
+                    serializer.errors,
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # -------------------------
+            # MULTIPLE RECORDS
+            # -------------------------
+            if isinstance(payload, str):
+                properties = json.loads(payload)
+            else:
+                properties = payload
+
+            created_data = []
+            errors = []
+
+            for index, property_data in enumerate(properties):
+
+                property_data["status"] = True
+
+                serializer = AdPropertySerializer(
+                    data=property_data
+                )
+
+                if not serializer.is_valid():
+
+                    errors.append(
+                        {
+                            "index": index,
+                            "errors": serializer.errors
+                        }
+                    )
+                    continue
+
+                property_obj = serializer.save()
+
+                images = request.FILES.getlist(
+                    f"property_{index}_images"
+                )
+
+                if images:
+
+                    AdProperty_images.objects.bulk_create(
+                        [
+                            AdProperty_images(
+                                property=property_obj,
+                                image=image
+                            )
+                            for image in images
+                        ]
+                    )
+
+                created_data.append(
+                    AdPropertySerializer(
+                        property_obj
+                    ).data
+                )
+
+            return Response(
+                {
+                    "message": "Properties processed",
+                    "created_count": len(created_data),
+                    "error_count": len(errors),
+                    "data": created_data,
+                    "errors": errors
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    @extend_schema(request=AdPropertySerializer)
+    def put(self, request, pk):
+
+        try:
+
+            property_obj = (
+                AdProperty.objects
+                .prefetch_related(
+                    "AdProperty_images"
+                )
+                .get(pk=pk)
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {"error": "Property not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+
+            deleted_ids = request.data.get(
+                "deleted_image_ids",
+                []
+            )
+
+            if isinstance(
+                deleted_ids,
+                str
+            ):
+                deleted_ids = [
+                    int(x.strip())
+                    for x in deleted_ids.split(",")
+                    if x.strip().isdigit()
+                ]
+
+            elif not isinstance(
+                deleted_ids,
+                list
+            ):
+                deleted_ids = []
+
+            for img_id in deleted_ids:
+
+                try:
+
+                    image = (
+                        AdProperty_images.objects
+                        .get(
+                            id=img_id,
+                            property=property_obj
+                        )
+                    )
+
+                    if (
+                        image.image
+                        and
+                        os.path.exists(
+                            image.image.path
+                        )
+                    ):
+                        os.remove(
+                            image.image.path
+                        )
+
+                    image.delete()
+
+                except AdProperty_images.DoesNotExist:
+                    pass
+
+            serializer = AdPropertySerializer(
+                property_obj,
+                data=request.data,
+                partial=True
+            )
+
+            if serializer.is_valid():
+
+                property_obj = serializer.save()
+
+                response_serializer = (
+                    AdPropertySerializer(
+                        property_obj
+                    )
+                )
+
+                return Response(
+                    {
+                        "message":
+                        "Property updated successfully",
+                        "data":
+                        response_serializer.data
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except Exception as e:
+
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def delete(self, request, pk):
+
+        try:
+
+            property_obj = (
+                AdProperty.objects
+                .prefetch_related(
+                    "AdProperty_images"
+                )
+                .get(pk=pk)
+            )
+
+            for image in (
+                property_obj
+                .AdProperty_images
+                .all()
+            ):
+
+                try:
+
+                    if (
+                        image.image
+                        and
+                        os.path.exists(
+                            image.image.path
+                        )
+                    ):
+                        os.remove(
+                            image.image.path
+                        )
+
+                except Exception:
+                    pass
+
+            property_obj.delete()
+
+            return Response(
+                {
+                    "message":
+                    "Property deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {"error": "Property not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        except Exception as e:
+
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
+
+import json
+
+from django.db import transaction
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.parsers import (
+    MultiPartParser,
+    FormParser,
+    JSONParser,
+)
+
+from drf_spectacular.utils import extend_schema
+
+from .models import (
+    AdProperty,
+    AdProperty_images,
+    AdPropertyBuilderDetails,
+    AdPropertyConfiguration,
+    AdPropertyFloorPlanImage,
+    AdPropertyLocationAdvantage,
+    AdPropertyHighlight,
+    AdPropertyAmenity,
+    AdPropertySpecification,
+    AdPropertyBrochure,
+)
+
+from .serializers import (
+    AdPropertySerializer,
+    AdPropertyRequestSerializer,
+
+    AdProperty_imagesSerializer,
+    AdProperty_imagesUploadSerializer,
+
+    AdPropertyBuilderDetailsSerializer,
+    AdPropertyBuilderDetailsRequestSerializer,
+
+    AdPropertyConfigurationSerializer,
+    AdPropertyConfigurationRequestSerializer,
+
+    AdPropertyFloorPlanImageSerializer,
+    AdPropertyFloorPlanRequestSerializer,
+
+    AdPropertyLocationAdvantageSerializer,
+    AdPropertyLocationAdvantageRequestSerializer,
+
+    AdPropertyHighlightSerializer,
+    AdPropertyHighlightRequestSerializer,
+
+    AdPropertyAmenitySerializer,
+    AdPropertyAmenityRequestSerializer,
+
+    AdPropertySpecificationSerializer,
+    AdPropertySpecificationRequestSerializer,
+
+    AdPropertyBrochureSerializer,
+    AdPropertyBrochureRequestSerializer,
+
+    AdPropertyCombinedRequestSerializer,
+)
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+        JSONParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertySerializer
+    )
+    def get(self, request, pk=None):
+
+        try:
+
+            queryset = (
+                AdProperty.objects
+                .select_related(
+                    "user_id",
+                    "category_id"
+                )
+                .prefetch_related(
+                    "hero_images",
+                    "configurations__floor_plan_images",
+                    "location_advantages",
+                    "property_highlights",
+                    "property_amenities",
+                    "specifications",
+                    "brochures",
+                )
+            )
+
+            if pk:
+
+                property_obj = queryset.get(
+                    property_id=pk
+                )
+
+                serializer = AdPropertySerializer(
+                    property_obj,
+                    context={"request": request}
+                )
+
+                return Response(
+                    {
+                        "success": True,
+                        "data": serializer.data
+                    },
+                    status=status.HTTP_200_OK
+                )
+
+            queryset = queryset.order_by(
+                "-property_id"
+            )
+
+            serializer = AdPropertySerializer(
+                queryset,
+                many=True,
+                context={"request": request}
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "count": queryset.count(),
+                    "data": serializer.data
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyRequestSerializer,
+        responses=AdPropertySerializer
+    )
+    def post(self, request):
+
+        try:
+
+            data = request.data.copy()
+
+            data["status"] = True
+
+            serializer = AdPropertyRequestSerializer(
+                data=data
+            )
+
+            if not serializer.is_valid():
+
+                return Response(
+                    {
+                        "success": False,
+                        "errors": serializer.errors
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            property_obj = serializer.save()
+
+            response_serializer = AdPropertySerializer(
+                property_obj,
+                context={"request": request}
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Property created successfully",
+                    "data": response_serializer.data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # ============================================================
+    # PUT
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyRequestSerializer,
+        responses=AdPropertySerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=pk
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+
+            serializer = AdPropertyRequestSerializer(
+                property_obj,
+                data=request.data,
+                partial=True
+            )
+
+            if not serializer.is_valid():
+
+                return Response(
+                    {
+                        "success": False,
+                        "errors": serializer.errors
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            property_obj = serializer.save()
+
+            response_serializer = AdPropertySerializer(
+                property_obj,
+                context={"request": request}
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Property updated successfully",
+                    "data": response_serializer.data
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    # ============================================================
+    # DELETE
+    # ============================================================
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=pk
+            )
+
+            property_obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Property deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdProperty_imagesAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdProperty_imagesSerializer
+    )
+    def get(self, request, property_id):
+
+        try:
+
+            AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        images = (
+            AdProperty_images.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("order")
+        )
+
+        serializer = AdProperty_imagesSerializer(
+            images,
+            many=True,
+            context={"request": request}
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdProperty_imagesUploadSerializer,
+        responses=AdProperty_imagesSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        images = request.FILES.getlist(
+            "images"
+        )
+
+        if not images:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "No images uploaded"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        existing_count = (
+            AdProperty_images.objects
+            .filter(
+                property=property_obj
+            )
+            .count()
+        )
+
+        if existing_count + len(images) > 5:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Maximum 5 hero images are allowed"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        objects = []
+
+        for index, image in enumerate(
+            images,
+            start=existing_count + 1
+        ):
+
+            objects.append(
+                AdProperty_images(
+                    property=property_obj,
+                    image=image,
+                    order=index
+                )
+            )
+
+        AdProperty_images.objects.bulk_create(
+            objects
+        )
+
+        serializer = AdProperty_imagesSerializer(
+            objects,
+            many=True,
+            context={"request": request}
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Hero images uploaded successfully",
+                "data": serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdProperty_imagesDetailAPIView(APIView):
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            image_obj = (
+                AdProperty_images.objects.get(
+                    id=pk
+                )
+            )
+
+            if image_obj.image:
+
+                image_obj.image.delete(
+                    save=False
+                )
+
+            image_obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Hero image deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdProperty_images.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Hero image not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyBuilderDetailsAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyBuilderDetailsSerializer
+    )
+    def get(self, request, property_id):
+
+        try:
+
+            builder = (
+                AdPropertyBuilderDetails.objects
+                .get(
+                    property_id=property_id
+                )
+            )
+
+            serializer = (
+                AdPropertyBuilderDetailsSerializer(
+                    builder
+                )
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "data": serializer.data
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyBuilderDetails.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Builder details not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyBuilderDetailsRequestSerializer,
+        responses=AdPropertyBuilderDetailsSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if AdPropertyBuilderDetails.objects.filter(
+            property=property_obj
+        ).exists():
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Builder details already exist"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = (
+            AdPropertyBuilderDetailsRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        builder = serializer.save(
+            property=property_obj
+        )
+
+        response_serializer = (
+            AdPropertyBuilderDetailsSerializer(
+                builder
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Builder details created successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+    # ============================================================
+    # PUT
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyBuilderDetailsRequestSerializer,
+        responses=AdPropertyBuilderDetailsSerializer
+    )
+    def put(self, request, property_id):
+
+        try:
+
+            builder = (
+                AdPropertyBuilderDetails.objects
+                .get(
+                    property_id=property_id
+                )
+            )
+
+        except AdPropertyBuilderDetails.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Builder details not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyBuilderDetailsRequestSerializer(
+                builder,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        builder = serializer.save()
+
+        response_serializer = (
+            AdPropertyBuilderDetailsSerializer(
+                builder
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Builder details updated successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # DELETE
+    # ============================================================
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, property_id):
+
+        try:
+
+            builder = (
+                AdPropertyBuilderDetails.objects
+                .get(
+                    property_id=property_id
+                )
+            )
+
+            builder.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Builder details deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyBuilderDetails.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Builder details not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyConfigurationAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyConfigurationSerializer
+    )
+    def get(self, request, property_id):
+
+        configurations = (
+            AdPropertyConfiguration.objects
+            .filter(
+                property_id=property_id
+            )
+            .prefetch_related(
+                "floor_plan_images"
+            )
+            .order_by("id")
+        )
+
+        serializer = (
+            AdPropertyConfigurationSerializer(
+                configurations,
+                many=True
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyConfigurationRequestSerializer,
+        responses=AdPropertyConfigurationSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyConfigurationRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        configuration = serializer.save(
+            property=property_obj
+        )
+
+        response_serializer = (
+            AdPropertyConfigurationSerializer(
+                configuration
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Configuration created successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyConfigurationDetailAPIView(APIView):
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyConfigurationSerializer
+    )
+    def get(self, request, pk):
+
+        try:
+
+            configuration = (
+                AdPropertyConfiguration.objects
+                .prefetch_related(
+                    "floor_plan_images"
+                )
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyConfiguration.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Configuration not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyConfigurationSerializer(
+                configuration
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # PUT
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyConfigurationRequestSerializer,
+        responses=AdPropertyConfigurationSerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            configuration = (
+                AdPropertyConfiguration.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyConfiguration.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Configuration not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyConfigurationRequestSerializer(
+                configuration,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        configuration = serializer.save()
+
+        response_serializer = (
+            AdPropertyConfigurationSerializer(
+                configuration
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Configuration updated successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # DELETE
+    # ============================================================
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            configuration = (
+                AdPropertyConfiguration.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            configuration.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Configuration deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyConfiguration.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Configuration not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyFloorPlanImageAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyFloorPlanImageSerializer
+    )
+    def get(self, request, configuration_id):
+
+        images = (
+            AdPropertyFloorPlanImage.objects
+            .filter(
+                configuration_id=configuration_id
+            )
+            .order_by("id")
+        )
+
+        serializer = (
+            AdPropertyFloorPlanImageSerializer(
+                images,
+                many=True,
+                context={"request": request}
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyFloorPlanRequestSerializer,
+        responses=AdPropertyFloorPlanImageSerializer
+    )
+    def post(self, request, configuration_id):
+
+        try:
+
+            configuration = (
+                AdPropertyConfiguration.objects
+                .get(
+                    id=configuration_id
+                )
+            )
+
+        except AdPropertyConfiguration.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Configuration not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyFloorPlanRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        plan_type = serializer.validated_data["plan_type"]
+        image = serializer.validated_data["image"]
+
+        if AdPropertyFloorPlanImage.objects.filter(
+            configuration=configuration,
+            plan_type=plan_type
+        ).exists():
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        f"{plan_type} floor plan already exists"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        floor_plan = (
+            AdPropertyFloorPlanImage.objects.create(
+                configuration=configuration,
+                plan_type=plan_type,
+                image=image
+            )
+        )
+
+        response_serializer = (
+            AdPropertyFloorPlanImageSerializer(
+                floor_plan,
+                context={"request": request}
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Floor plan uploaded successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyFloorPlanImageDetailAPIView(APIView):
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            floor_plan = (
+                AdPropertyFloorPlanImage.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            if floor_plan.image:
+
+                floor_plan.image.delete(
+                    save=False
+                )
+
+            floor_plan.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Floor plan deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyFloorPlanImage.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Floor plan not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyLocationAdvantageAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyLocationAdvantageSerializer
+    )
+    def get(self, request, property_id):
+
+        locations = (
+            AdPropertyLocationAdvantage.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("order")
+        )
+
+        serializer = (
+            AdPropertyLocationAdvantageSerializer(
+                locations,
+                many=True
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyLocationAdvantageRequestSerializer,
+        responses=AdPropertyLocationAdvantageSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        count = (
+            AdPropertyLocationAdvantage.objects
+            .filter(
+                property=property_obj
+            )
+            .count()
+        )
+
+        if count >= 8:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Maximum 8 location advantages allowed"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = (
+            AdPropertyLocationAdvantageRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        location = serializer.save(
+            property=property_obj
+        )
+
+        response_serializer = (
+            AdPropertyLocationAdvantageSerializer(
+                location
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Location advantage added successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyLocationAdvantageDetailAPIView(APIView):
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyLocationAdvantageSerializer
+    )
+    def get(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyLocationAdvantage.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyLocationAdvantage.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Location advantage not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyLocationAdvantageSerializer(
+                obj
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # PUT
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyLocationAdvantageRequestSerializer,
+        responses=AdPropertyLocationAdvantageSerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyLocationAdvantage.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyLocationAdvantage.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Location advantage not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyLocationAdvantageRequestSerializer(
+                obj,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        obj = serializer.save()
+
+        response_serializer = (
+            AdPropertyLocationAdvantageSerializer(
+                obj
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Location advantage updated successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # DELETE
+    # ============================================================
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyLocationAdvantage.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Location advantage deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyLocationAdvantage.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Location advantage not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyHighlightAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyHighlightSerializer
+    )
+    def get(self, request, property_id):
+
+        highlights = (
+            AdPropertyHighlight.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("order")
+        )
+
+        serializer = (
+            AdPropertyHighlightSerializer(
+                highlights,
+                many=True
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyHighlightRequestSerializer,
+        responses=AdPropertyHighlightSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyHighlightRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        highlight = serializer.save(
+            property=property_obj
+        )
+
+        response_serializer = (
+            AdPropertyHighlightSerializer(
+                highlight
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Highlight added successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyHighlightDetailAPIView(APIView):
+
+    @extend_schema(
+        request=AdPropertyHighlightRequestSerializer,
+        responses=AdPropertyHighlightSerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyHighlight.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyHighlight.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Highlight not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyHighlightRequestSerializer(
+                obj,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        obj = serializer.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Highlight updated successfully",
+                "data": AdPropertyHighlightSerializer(
+                    obj
+                ).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyHighlight.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Highlight deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyHighlight.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Highlight not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyAmenityAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    @extend_schema(
+        responses=AdPropertyAmenitySerializer
+    )
+    def get(self, request, property_id):
+
+        amenities = (
+            AdPropertyAmenity.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("order")
+        )
+
+        serializer = (
+            AdPropertyAmenitySerializer(
+                amenities,
+                many=True
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        request=AdPropertyAmenityRequestSerializer,
+        responses=AdPropertyAmenitySerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyAmenityRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        amenity = serializer.save(
+            property=property_obj
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Amenity added successfully",
+                "data": AdPropertyAmenitySerializer(
+                    amenity
+                ).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyAmenityDetailAPIView(APIView):
+
+    @extend_schema(
+        request=AdPropertyAmenityRequestSerializer,
+        responses=AdPropertyAmenitySerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyAmenity.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertyAmenity.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Amenity not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyAmenityRequestSerializer(
+                obj,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        obj = serializer.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Amenity updated successfully",
+                "data": AdPropertyAmenitySerializer(
+                    obj
+                ).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertyAmenity.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Amenity deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyAmenity.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Amenity not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertySpecificationAPIView(APIView):
+
+    parser_classes = [
+        JSONParser,
+        FormParser,
+        MultiPartParser,
+    ]
+
+    @extend_schema(
+        responses=AdPropertySpecificationSerializer
+    )
+    def get(self, request, property_id):
+
+        specifications = (
+            AdPropertySpecification.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("order")
+        )
+
+        serializer = (
+            AdPropertySpecificationSerializer(
+                specifications,
+                many=True
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        request=AdPropertySpecificationRequestSerializer,
+        responses=AdPropertySpecificationSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertySpecificationRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        specification = serializer.save(
+            property=property_obj
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Specification added successfully",
+                "data": AdPropertySpecificationSerializer(
+                    specification
+                ).data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertySpecificationDetailAPIView(APIView):
+
+    @extend_schema(
+        request=AdPropertySpecificationRequestSerializer,
+        responses=AdPropertySpecificationSerializer
+    )
+    def put(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertySpecification.objects
+                .get(
+                    id=pk
+                )
+            )
+
+        except AdPropertySpecification.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Specification not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertySpecificationRequestSerializer(
+                obj,
+                data=request.data,
+                partial=True
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        obj = serializer.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Specification updated successfully",
+                "data": AdPropertySpecificationSerializer(
+                    obj
+                ).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            obj = (
+                AdPropertySpecification.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            obj.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Specification deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertySpecification.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Specification not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyBrochureAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertyBrochureSerializer
+    )
+    def get(self, request, property_id):
+
+        brochures = (
+            AdPropertyBrochure.objects
+            .filter(
+                property_id=property_id
+            )
+            .order_by("-uploaded_at")
+        )
+
+        serializer = (
+            AdPropertyBrochureSerializer(
+                brochures,
+                many=True,
+                context={"request": request}
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyBrochureRequestSerializer,
+        responses=AdPropertyBrochureSerializer
+    )
+    def post(self, request, property_id):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=property_id
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = (
+            AdPropertyBrochureRequestSerializer(
+                data=request.data
+            )
+        )
+
+        if not serializer.is_valid():
+
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        brochure = AdPropertyBrochure.objects.create(
+            property=property_obj,
+            title=serializer.validated_data["title"],
+            document=serializer.validated_data["document"]
+        )
+
+        response_serializer = (
+            AdPropertyBrochureSerializer(
+                brochure,
+                context={"request": request}
+            )
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Brochure uploaded successfully",
+                "data": response_serializer.data
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyBrochureDetailAPIView(APIView):
+
+    @extend_schema(
+        responses=None
+    )
+    def delete(self, request, pk):
+
+        try:
+
+            brochure = (
+                AdPropertyBrochure.objects
+                .get(
+                    id=pk
+                )
+            )
+
+            if brochure.document:
+
+                brochure.document.delete(
+                    save=False
+                )
+
+            brochure.delete()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Brochure deleted successfully"
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except AdPropertyBrochure.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Brochure not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyCombinedAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+    ]
+
+    # ============================================================
+    # HELPER
+    # ============================================================
+
+    def parse_json_field(self, value, default):
+
+        if value is None:
+            return default
+
+        if isinstance(value, (dict, list)):
+            return value
+
+        if isinstance(value, str):
+
+            try:
+                return json.loads(value)
+
+            except json.JSONDecodeError:
+                raise ValueError(
+                    "Invalid JSON format"
+                )
+
+        return default
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertySerializer(many=True)
+    )
+    def get(self, request):
+
+        property_objects = (
+            AdProperty.objects
+            .select_related(
+                "user_id",
+                "category_id"
+            )
+            .prefetch_related(
+                "hero_images",
+                "configurations__floor_plan_images",
+                "location_advantages",
+                "property_highlights",
+                "property_amenities",
+                "specifications",
+                "brochures",
+            )
+            .all()
+            .order_by("-property_id")
+        )
+
+        serializer = AdPropertySerializer(
+            property_objects,
+            many=True,
+            context={"request": request}
+        )
+
+        return Response(
+            {
+                "success": True,
+                "count": property_objects.count(),
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # POST
+    # ============================================================
+
+    @extend_schema(
+        request=AdPropertyCombinedRequestSerializer,
+        responses=AdPropertySerializer
+    )
+    @transaction.atomic
+    def post(self, request):
+
+        try:
+
+            # ====================================================
+            # MAIN PROPERTY
+            # ====================================================
+
+            property_data = request.data.copy()
+
+            property_data.pop(
+                "builder_details",
+                None
+            )
+
+            property_data.pop(
+                "configurations",
+                None
+            )
+
+            property_data.pop(
+                "location_advantages",
+                None
+            )
+
+            property_data.pop(
+                "highlights",
+                None
+            )
+
+            property_data.pop(
+                "amenities",
+                None
+            )
+
+            property_data.pop(
+                "specifications",
+                None
+            )
+
+            property_data.pop(
+                "hero_images",
+                None
+            )
+
+            property_data.pop(
+                "brochures",
+                None
+            )
+
+            property_data.pop(
+                "brochure_titles",
+                None
+            )
+
+            property_data["status"] = True
+
+            property_serializer = (
+                AdPropertyRequestSerializer(
+                    data=property_data
+                )
+            )
+
+            if not property_serializer.is_valid():
+
+                return Response(
+                    {
+                        "success": False,
+                        "section": "property",
+                        "errors": property_serializer.errors
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            property_obj = property_serializer.save()
+
+            # ====================================================
+            # HERO IMAGES
+            # ====================================================
+
+            hero_images = request.FILES.getlist(
+                "hero_images"
+            )
+
+            if len(hero_images) > 5:
+
+                raise ValueError(
+                    "Maximum 5 hero images are allowed"
+                )
+
+            for index, image in enumerate(
+                hero_images,
+                start=1
+            ):
+
+                AdProperty_images.objects.create(
+                    property=property_obj,
+                    image=image,
+                    order=index
+                )
+
+            # ====================================================
+            # BUILDER
+            # ====================================================
+
+            builder_details = self.parse_json_field(
+                request.data.get(
+                    "builder_details"
+                ),
+                {}
+            )
+
+            if builder_details:
+
+                builder_serializer = (
+                    AdPropertyBuilderDetailsRequestSerializer(
+                        data=builder_details
+                    )
+                )
+
+                if not builder_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": "builder_details",
+                            "errors": builder_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                builder_serializer.save(
+                    property=property_obj
+                )
+
+            # ====================================================
+            # CONFIGURATIONS
+            # ====================================================
+
+            configurations = self.parse_json_field(
+                request.data.get(
+                    "configurations"
+                ),
+                []
+            )
+
+            if not isinstance(
+                configurations,
+                list
+            ):
+
+                raise ValueError(
+                    "configurations must be a JSON array"
+                )
+
+            for config_index, config_data in enumerate(
+                configurations
+            ):
+
+                config_data = config_data.copy()
+
+                config_data.pop(
+                    "floor_plan_2d",
+                    None
+                )
+
+                config_data.pop(
+                    "floor_plan_3d",
+                    None
+                )
+
+                config_serializer = (
+                    AdPropertyConfigurationRequestSerializer(
+                        data=config_data
+                    )
+                )
+
+                if not config_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": (
+                                f"configuration_{config_index}"
+                            ),
+                            "errors": config_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                configuration = config_serializer.save(
+                    property=property_obj
+                )
+
+                # ----------------------------------------------
+                # 2D
+                # ----------------------------------------------
+
+                image_2d = request.FILES.get(
+                    f"configuration_{config_index}_2d"
+                )
+
+                if image_2d:
+
+                    AdPropertyFloorPlanImage.objects.create(
+                        configuration=configuration,
+                        plan_type="2D",
+                        image=image_2d
+                    )
+
+                # ----------------------------------------------
+                # 3D
+                # ----------------------------------------------
+
+                image_3d = request.FILES.get(
+                    f"configuration_{config_index}_3d"
+                )
+
+                if image_3d:
+
+                    AdPropertyFloorPlanImage.objects.create(
+                        configuration=configuration,
+                        plan_type="3D",
+                        image=image_3d
+                    )
+
+            # ====================================================
+            # LOCATION ADVANTAGES
+            # ====================================================
+
+            location_advantages = self.parse_json_field(
+                request.data.get(
+                    "location_advantages"
+                ),
+                []
+            )
+
+            if len(location_advantages) > 8:
+
+                raise ValueError(
+                    "Maximum 8 location advantages are allowed"
+                )
+
+            for location_data in location_advantages:
+
+                location_serializer = (
+                    AdPropertyLocationAdvantageRequestSerializer(
+                        data=location_data
+                    )
+                )
+
+                if not location_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": "location_advantages",
+                            "errors": location_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                location_serializer.save(
+                    property=property_obj
+                )
+
+            # ====================================================
+            # HIGHLIGHTS
+            # ====================================================
+
+            highlights = self.parse_json_field(
+                request.data.get(
+                    "highlights"
+                ),
+                []
+            )
+
+            for highlight_data in highlights:
+
+                if isinstance(
+                    highlight_data,
+                    str
+                ):
+
+                    highlight_data = {
+                        "name": highlight_data
+                    }
+
+                highlight_serializer = (
+                    AdPropertyHighlightRequestSerializer(
+                        data=highlight_data
+                    )
+                )
+
+                if not highlight_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": "highlights",
+                            "errors": highlight_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                highlight_serializer.save(
+                    property=property_obj
+                )
+
+            # ====================================================
+            # AMENITIES
+            # ====================================================
+
+            amenities = self.parse_json_field(
+                request.data.get(
+                    "amenities"
+                ),
+                []
+            )
+
+            for amenity_data in amenities:
+
+                if isinstance(
+                    amenity_data,
+                    str
+                ):
+
+                    amenity_data = {
+                        "name": amenity_data
+                    }
+
+                amenity_serializer = (
+                    AdPropertyAmenityRequestSerializer(
+                        data=amenity_data
+                    )
+                )
+
+                if not amenity_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": "amenities",
+                            "errors": amenity_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                amenity_serializer.save(
+                    property=property_obj
+                )
+
+            # ====================================================
+            # SPECIFICATIONS
+            # ====================================================
+
+            specifications = self.parse_json_field(
+                request.data.get(
+                    "specifications"
+                ),
+                []
+            )
+
+            for specification_data in specifications:
+
+                specification_serializer = (
+                    AdPropertySpecificationRequestSerializer(
+                        data=specification_data
+                    )
+                )
+
+                if not specification_serializer.is_valid():
+
+                    return Response(
+                        {
+                            "success": False,
+                            "section": "specifications",
+                            "errors": specification_serializer.errors
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                specification_serializer.save(
+                    property=property_obj
+                )
+
+            # ====================================================
+            # BROCHURES
+            # ====================================================
+
+            brochure_titles = request.data.getlist(
+                "brochure_titles"
+            )
+
+            brochure_files = request.FILES.getlist(
+                "brochures"
+            )
+
+            for index, document in enumerate(
+                brochure_files
+            ):
+
+                title = (
+                    brochure_titles[index]
+                    if index < len(brochure_titles)
+                    else f"Brochure {index + 1}"
+                )
+
+                AdPropertyBrochure.objects.create(
+                    property=property_obj,
+                    title=title,
+                    document=document
+                )
+
+            # ====================================================
+            # FINAL QUERY
+            # ====================================================
+
+            property_obj = (
+                AdProperty.objects
+                .select_related(
+                    "user_id",
+                    "category_id"
+                )
+                .prefetch_related(
+                    "hero_images",
+                    "configurations__floor_plan_images",
+                    "location_advantages",
+                    "property_highlights",
+                    "property_amenities",
+                    "specifications",
+                    "brochures",
+                )
+                .get(
+                    property_id=property_obj.property_id
+                )
+            )
+
+            response_serializer = (
+                AdPropertySerializer(
+                    property_obj,
+                    context={"request": request}
+                )
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": (
+                        "Property and all details "
+                        "created successfully"
+                    ),
+                    "data": response_serializer.data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except ValueError as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": str(e)
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class AdPropertyCombinedDetailAPIView(APIView):
+
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+        JSONParser,
+    ]
+
+    # ============================================================
+    # GET
+    # ============================================================
+
+    @extend_schema(
+        responses=AdPropertySerializer
+    )
+    def get(self, request, pk):
+
+        try:
+
+            property_obj = (
+                AdProperty.objects
+                .select_related(
+                    "user_id",
+                    "category_id"
+                )
+                .prefetch_related(
+                    "hero_images",
+                    "configurations__floor_plan_images",
+                    "location_advantages",
+                    "property_highlights",
+                    "property_amenities",
+                    "specifications",
+                    "brochures",
+                )
+                .get(
+                    property_id=pk
+                )
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = AdPropertySerializer(
+            property_obj,
+            context={"request": request}
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    # ============================================================
+    # DELETE WHOLE PROPERTY
+    # ============================================================
+
+    @extend_schema(
+        responses=None
+    )
+    @transaction.atomic
+    def delete(self, request, pk):
+
+        try:
+
+            property_obj = AdProperty.objects.get(
+                property_id=pk
+            )
+
+        except AdProperty.DoesNotExist:
+
+            return Response(
+                {
+                    "success": False,
+                    "message": "Property not found"
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        property_obj.delete()
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Property and all related details "
+                    "deleted successfully"
+                )
+            },
+            status=status.HTTP_200_OK
+        )
 
